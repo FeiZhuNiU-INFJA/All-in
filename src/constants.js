@@ -1,0 +1,5 @@
+module.exports = {
+  STARTING_CHIPS: 2000,
+  MAX_PLAYERS: 10,
+  MIN_PLAYERS_TO_START: 2,
+};

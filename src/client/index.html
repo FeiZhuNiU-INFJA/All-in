@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+	<meta charset="utf-8" />
+	<link href="css/materialize.min.css" type="text/css" rel="stylesheet" media="screen,projection" />
+	<link href="css/index.css" type="text/css" rel="stylesheet" media="screen,projection" />
+	<meta property="og:image" content="./img/pokerBanner.png" />
+	<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+	<link rel="manifest" href="/site.webmanifest">
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<meta name="theme-color" content="#0a1f14">
+	<title>LAN Texas Hold'em</title>
+</head>
+
+<body>
+	<div id="gameDiv" class="poker-room" style="display:none;">
+		<div class="table-hud">
+			<div id="table-title" class="table-hud-message"></div>
+			<div id="tableStage" class="table-hud-stage"></div>
+		</div>
+
+		<div class="table-stage">
+			<div class="poker-table">
+				<div class="table-rail"></div>
+				<div class="table-felt">
+					<div class="pot-area">
+						<span class="pot-label">POT</span>
+						<span id="potAmount" class="pot-amount">$0</span>
+					</div>
+					<div id="communityCards" class="community-cards"></div>
+				</div>
+			</div>
+			<div id="opponentCards" class="seats-ring"></div>
+		</div>
+
+		<div class="hero-panel">
+			<div id="playerInformationCard" class="hero-seat">
+				<div class="hero-header">
+					<span id="usernamesCards" class="hero-name"></span>
+					<span id="blindStatus" class="hero-blind"></span>
+				</div>
+				<div id="mycards" class="hero-cards"></div>
+				<div class="hero-footer">
+					<span id="usernamesMoney" class="hero-stack">$0</span>
+					<span id="status" class="hero-status"></span>
+				</div>
+			</div>
+			<div class="action-bar">
+				<div id="playNext" class="play-next-wrap"></div>
+				<div class="action-buttons">
+					<button onClick="fold()" id="usernameFold" class="action-btn action-fold">Fold</button>
+					<button onClick="check()" id="usernameCheck" class="action-btn action-check">Check</button>
+					<button id="usernameBet" class="action-btn action-bet">Bet</button>
+					<button onClick="call()" id="usernameCall" class="action-btn action-call">Call</button>
+					<button id="usernameRaise" class="action-btn action-raise">Raise</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<div id="rebuyBar" class="rebuy-bar" style="display:none;">
+		<p>筹码用完了</p>
+		<button type="button" class="btn rebuy-btn" onclick="requestRebuy()">Buy 2000 (+耻辱币)</button>
+		<button type="button" class="btn spectate-btn" onclick="dismissRebuyPrompt()">观战</button>
+	</div>
+
+	<div id="mainContent" class="lobby-screen">
+		<div class="lobby-card">
+			<h1 class="lobby-title">LAN Texas Hold'em</h1>
+			<p class="lobby-subtitle">局域网好友局 · 初始 2000 筹码</p>
+			<div class="lobby-actions">
+				<a id="hostButton" class="lobby-btn lobby-btn-primary" href="#">创建房间</a>
+				<a id="joinButton" class="lobby-btn lobby-btn-secondary" href="#">加入房间</a>
+			</div>
+		</div>
+	</div>
+
+	<div id="hostModal" class="lobby-modal">
+		<div class="modal-backdrop"></div>
+		<div class="modal-panel">
+			<div class="modal-content">
+				<h4>创建房间</h4>
+				<div id="hostModalContent">
+					<p>输入昵称，系统会生成 4 位房间码发给朋友。</p>
+					<div class="input-field">
+						<label for="hostName-field">昵称</label>
+						<input type="text" name="name" id="hostName-field" maxlength="12" required />
+					</div>
+					<button onclick="beginHost()" type="button" class="modal-action-btn">获取房间码</button>
+				</div>
+				<div id="playersNames"></div>
+				<div id="startGameArea"></div>
+			</div>
+			<div class="modal-footer">
+				<a href="#" class="modal-close modal-action-btn modal-action-muted">关闭</a>
+			</div>
+		</div>
+	</div>
+
+	<div id="joinModal" class="lobby-modal">
+		<div class="modal-backdrop"></div>
+		<div class="modal-panel">
+			<div class="modal-content">
+				<h4>加入房间</h4>
+				<div id="joinModalContent">
+					<p>输入昵称和房主给你的房间码。</p>
+					<div class="input-field">
+						<label for="joinName-field">昵称</label>
+						<input type="text" name="name" id="joinName-field" maxlength="12" required />
+					</div>
+					<div class="input-field">
+						<label for="code">房间码</label>
+						<input type="text" name="code" id="code-field" required />
+					</div>
+					<button onclick="joinRoom()" type="button" class="modal-action-btn">加入</button>
+				</div>
+				<div id="playersNamesJoined"></div>
+				<div id="startGameAreaDisconnectSituation"></div>
+			</div>
+			<div class="modal-footer">
+				<a href="#" class="modal-close modal-action-btn modal-action-muted">关闭</a>
+			</div>
+		</div>
+	</div>
+
+	<div id="betModal" class="lobby-modal">
+		<div class="modal-backdrop"></div>
+		<div class="modal-panel">
+			<div class="modal-content">
+				<h4>下注</h4>
+				<div id="betDisplay"><h4>拖动滑块选择金额</h4></div>
+				<p class="range-field">
+					<input type="range" id="betRangeSlider" min="0" max="100" value="0"
+						onchange="updateBetDisplay()" oninput="updateBetDisplay()" />
+				</p>
+				<button onclick="bet(); closeLobbyModal();" type="button" class="modal-action-btn">确认下注</button>
+			</div>
+			<div class="modal-footer">
+				<a href="#" class="modal-close modal-action-btn modal-action-muted">关闭</a>
+			</div>
+		</div>
+	</div>
+
+	<div id="raiseModal" class="lobby-modal">
+		<div class="modal-backdrop"></div>
+		<div class="modal-panel">
+			<div class="modal-content">
+				<h4>加注</h4>
+				<div id="raiseDisplay"><h4>拖动滑块选择加注金额</h4></div>
+				<p class="range-field">
+					<input type="range" id="raiseRangeSlider" min="0" max="100" value="0"
+						onchange="updateRaiseDisplay()" oninput="updateRaiseDisplay()" />
+				</p>
+				<button onclick="raise(); closeLobbyModal();" type="button" class="modal-action-btn">确认加注</button>
+			</div>
+			<div class="modal-footer">
+				<a href="#" class="modal-close modal-action-btn modal-action-muted">关闭</a>
+			</div>
+		</div>
+	</div>
+
+	<script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
+	<script src="./js/materialize.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.5.0/socket.io.min.js"></script>
+	<script src="./main.js"></script>
+</body>
+
+</html>
