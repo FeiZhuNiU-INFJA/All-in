@@ -38,4 +38,3 @@ Thumbs.db
 # Local tooling / worktrees
 .worktrees/
 .cursor/
-docs/superpowers/
