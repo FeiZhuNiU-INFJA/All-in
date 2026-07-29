@@ -186,7 +186,7 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Poker server listening on http://${HOST}:${PORT}`);
+  console.log(`All-In listening on http://${HOST}:${PORT}`);
   const addrs = lanAddresses();
   if (addrs.length === 0) {
     console.log('No non-internal IPv4 address found; try http://127.0.0.1:' + PORT);

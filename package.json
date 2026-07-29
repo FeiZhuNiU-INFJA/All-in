@@ -1,7 +1,7 @@
 {
-  "name": "poker-room",
+  "name": "all-in",
   "version": "1.0.0",
-  "description": "Lightweight Texas Hold'em room for friends — LAN or cloud",
+  "description": "All-In — lightweight Texas Hold'em for friends (LAN or cloud)",
   "main": "index.js",
   "license": "MIT",
   "scripts": {
