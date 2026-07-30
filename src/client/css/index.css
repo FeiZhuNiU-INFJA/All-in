@@ -174,6 +174,54 @@ code {
   background: rgba(255, 255, 255, 0.1) !important;
 }
 
+/* Bet / raise range slider — custom, thicker, on-brand. */
+.range-field input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 30px;
+  background: transparent;
+  outline: none;
+  padding: 0;
+  margin: 8px 0;
+  cursor: pointer;
+}
+/* WebKit (Chrome / Safari / Edge) */
+.range-field input[type='range']::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #2ecc71, #1a8a4a);
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+.range-field input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 30%, #fff, #f6e27a 45%, #b8860b);
+  border: 2px solid #5c440c;
+  margin-top: -8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+/* Firefox */
+.range-field input[type='range']::-moz-range-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #2ecc71, #1a8a4a);
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+.range-field input[type='range']::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 30%, #fff, #f6e27a 45%, #b8860b);
+  border: 2px solid #5c440c;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+
 .lobby-modal .modal-footer {
   background: rgba(0, 0, 0, 0.2);
   padding: 12px 24px 16px;
@@ -186,6 +234,22 @@ body.modal-open {
 .toast {
   position: relative;
   z-index: 3000 !important;
+}
+
+/* On phones the bottom toast covers the action buttons — move it to the top. */
+@media (max-width: 600px) {
+  #toast-container {
+    top: 8px !important;
+    bottom: auto !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+  }
+  #toast-container .toast {
+    float: none !important;
+    width: auto;
+    max-width: 92vw;
+  }
 }
 
 /* ── Poker Room Layout ────────────────────────────────── */
@@ -221,12 +285,16 @@ body.modal-open {
   margin-top: 2px;
 }
 
-.table-hud-countdown {
-  font-size: 0.85rem;
+/* Countdown shown on the felt (below the community cards). */
+.felt-countdown {
+  position: relative;
+  z-index: 3;
+  font-size: 1rem;
+  font-weight: 800;
   color: #ffe066;
-  font-weight: 600;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
   min-height: 1.2em;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 /* ── Table Stage ──────────────────────────────────────── */
@@ -459,6 +527,44 @@ body.modal-open {
   transform: scale(1.03);
 }
 
+/* ── Action popup (fold/check/call/bet/raise) ────────── */
+
+/* Bold label that pops above a seat when that player acts, so the whole table
+   sees the move. Positioned above its seat; .hero-seat and .table-seat are the
+   positioned ancestors. */
+.action-popup {
+  position: absolute;
+  top: -34px;
+  left: 50%;
+  padding: 6px 16px;
+  border-radius: 16px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #fff;
+  white-space: nowrap;
+  z-index: 30;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  animation: action-pop 1.8s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+}
+.action-popup.action-fold { background: #c0392b; box-shadow: 0 0 18px rgba(192, 57, 43, 0.85); }
+.action-popup.action-check { background: #2980b9; box-shadow: 0 0 18px rgba(41, 128, 185, 0.85); }
+.action-popup.action-call { background: #27ae60; box-shadow: 0 0 18px rgba(39, 174, 96, 0.85); }
+.action-popup.action-bet { background: #8e44ad; box-shadow: 0 0 18px rgba(142, 68, 173, 0.85); }
+.action-popup.action-raise { background: #e67e22; box-shadow: 0 0 18px rgba(230, 126, 34, 0.85); }
+
+@keyframes action-pop {
+  0% { transform: translateX(-50%) scale(0.3); opacity: 0; }
+  18% { transform: translateX(-50%) scale(1.2); opacity: 1; }
+  30% { transform: translateX(-50%) scale(0.92); }
+  42% { transform: translateX(-50%) scale(1.06); }
+  54% { transform: translateX(-50%) scale(0.98); }
+  64% { transform: translateX(-50%) scale(1); }
+  78% { transform: translateX(-50%) scale(1); opacity: 1; }
+  100% { transform: translateX(-50%) translateY(-16px) scale(0.9); opacity: 0; }
+}
+
 /* A chip flying from the pot to the winner. Positioned fixed in the viewport
    and moved via transform/opacity transitions. */
 .fly-chip {
@@ -489,6 +595,7 @@ body.modal-open {
 }
 
 .hero-seat {
+  position: relative;
   background: rgba(0, 0, 0, 0.45);
   border: 2px solid rgba(255, 255, 255, 0.15);
   border-radius: 14px;
@@ -529,6 +636,14 @@ body.modal-open {
   border-radius: 4px;
   padding: 1px 6px;
   min-height: 1.1em;
+}
+
+/* No blind (between hands) -> no content -> collapse the red badge entirely
+   instead of leaving an empty red box next to the name. */
+.hero-blind:empty {
+  background: none;
+  min-height: 0;
+  padding: 0;
 }
 
 .hero-cards {
@@ -833,6 +948,27 @@ body.modal-open {
   border: 1px solid #5c440c;
   box-shadow: inset 0 0 2px rgba(255, 255, 255, 0.4);
   display: inline-block;
+}
+
+.shame-count {
+  font-size: 0.62rem;
+  color: #f6e27a;
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+/* Shameful title earned by rebuying (送财童子 / 慈善家 / …) */
+.shame-title {
+  font-size: 0.6rem;
+  background: rgba(246, 226, 122, 0.16);
+  border: 1px solid rgba(246, 226, 122, 0.5);
+  color: #f6e27a;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 3px;
+  font-weight: 700;
+  font-style: italic;
+  white-space: nowrap;
 }
 
 .rebuy-bar {

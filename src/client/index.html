@@ -20,7 +20,6 @@
 		<div class="table-hud">
 			<div id="table-title" class="table-hud-message"></div>
 			<div id="tableStage" class="table-hud-stage"></div>
-			<div id="countdown" class="table-hud-countdown"></div>
 		</div>
 
 		<div class="table-stage">
@@ -32,6 +31,7 @@
 						<span id="potAmount" class="pot-amount">$0</span>
 					</div>
 					<div id="communityCards" class="community-cards"></div>
+						<div id="countdown" class="felt-countdown"></div>
 				</div>
 			</div>
 			<div id="opponentCards" class="seats-ring"></div>
@@ -150,7 +150,7 @@
 		<div class="modal-panel">
 			<div class="modal-content">
 				<h4>加注</h4>
-				<div id="raiseDisplay"><h4>拖动滑块选择加注金额</h4></div>
+				<div id="raiseDisplay"></div>
 				<p class="range-field">
 					<input type="range" id="raiseRangeSlider" min="0" max="100" value="0"
 						onchange="updateRaiseDisplay()" oninput="updateRaiseDisplay()" />

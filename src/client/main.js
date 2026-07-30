@@ -7,6 +7,22 @@ function openLobbyModal(selector) {
 function closeLobbyModal() {
   $('.lobby-modal').removeClass('is-open');
   $('body').removeClass('modal-open');
+  // Re-enable the lobby buttons. Hosting/joining disables + unbinds the other
+  // button, so restore both when returning to the lobby screen.
+  $('#hostButton')
+    .removeClass('disabled')
+    .off('click')
+    .on('click', function (e) {
+      e.preventDefault();
+      openLobbyModal('#hostModal');
+    });
+  $('#joinButton')
+    .removeClass('disabled')
+    .off('click')
+    .on('click', function (e) {
+      e.preventDefault();
+      openLobbyModal('#joinModal');
+    });
 }
 
 $(document).ready(function () {
@@ -31,7 +47,7 @@ $(document).ready(function () {
     openLobbyModal('#raiseModal');
   });
 
-  $(document).on('click', '.modal-close, .modal-backdrop', function (e) {
+  $(document).on('click', '.modal-close', function (e) {
     e.preventDefault();
     closeLobbyModal();
   });
@@ -172,44 +188,44 @@ function playChipsSound() {
   }
 }
 
-// Coins showering down — a bet. Each coin is a metallic clink: a short noise
-// transient (the strike) plus a triangle-wave resonance with harmonics and a
-// longer ringing decay, randomly pitched, so it reads as coins clattering.
+// Coins showering down — a bet. Crisp, bright metallic clinks: a high sine
+// "tink" with a very short decay plus a bright noise strike, several of them
+// scattered so it reads as a handful of coins clattering.
 function playCoinsSound() {
   var ctx = ensureAudio();
   if (!ctx) return;
-  var n = 4;
+  var n = 5;
   for (var k = 0; k < n; k++) {
-    var t0 = ctx.currentTime + k * 0.08 + Math.random() * 0.03;
-    // strike transient
-    var durN = 0.025;
+    var t0 = ctx.currentTime + k * 0.06 + Math.random() * 0.02;
+    // bright high "tink" (sine, short decay = crisp)
+    var osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 3800 + Math.random() * 2200;
+    var og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t0);
+    og.gain.exponentialRampToValueAtTime(0.22, t0 + 0.001);
+    og.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+    osc.connect(og);
+    og.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.1);
+    // bright strike transient
+    var durN = 0.02;
     var bufN = ctx.createBuffer(1, Math.floor(ctx.sampleRate * durN), ctx.sampleRate);
     var dN = bufN.getChannelData(0);
     for (var i = 0; i < dN.length; i++)
-      dN[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / dN.length, 4);
+      dN[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / dN.length, 5);
     var srcN = ctx.createBufferSource();
     srcN.buffer = bufN;
     var hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
-    hp.frequency.value = 3200;
+    hp.frequency.value = 4500;
     var gN = ctx.createGain();
-    gN.gain.value = 0.22;
+    gN.gain.value = 0.18;
     srcN.connect(hp);
     hp.connect(gN);
     gN.connect(ctx.destination);
     srcN.start(t0);
-    // ringing resonance
-    var osc = ctx.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.value = 2400 + Math.random() * 1100;
-    var og = ctx.createGain();
-    og.gain.setValueAtTime(0.0001, t0);
-    og.gain.exponentialRampToValueAtTime(0.2, t0 + 0.002);
-    og.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
-    osc.connect(og);
-    og.connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0 + 0.22);
   }
 }
 
@@ -430,17 +446,32 @@ function parseWinners(winners) {
     .filter(Boolean);
 }
 
+function shameTitle(count) {
+  if (!count || count <= 0) return '';
+  if (count >= 8) return '人形 ATM';
+  if (count >= 5) return '散财神';
+  if (count >= 3) return '慈善家';
+  return '送财童子';
+}
+
 function shameCoinsHtml(count) {
   if (!count || count <= 0) return '';
+  var title = shameTitle(count);
+  var shown = Math.min(count, 5);
   var coins = '';
-  for (var i = 0; i < count; i++) {
-    coins += '<span class="shame-coin" title="Shame coin"></span>';
+  for (var i = 0; i < shown; i++) {
+    coins += '<span class="shame-coin" title="耻辱币"></span>';
   }
+  if (count > 5) {
+    coins += '<span class="shame-count">×' + count + '</span>';
+  }
+  var titleHtml = title ? '<span class="shame-title">' + title + '</span>' : '';
   return (
     '<span class="shame-coins" title="' +
     count +
-    ' shame coin(s)">' +
+    ' 耻辱币">' +
     coins +
+    titleHtml +
     '</span>'
   );
 }
@@ -471,7 +502,15 @@ socket.on('rebuyResult', function (data) {
     return;
   }
   $('#rebuyBar').hide();
-  Materialize.toast('Rebuy +2000. Shame coin earned.', 3000);
+  var lines = [
+    'Rebuy +2000！耻辱币 +1 🐔',
+    '又输光了？没关系 +2000，耻辱币 +1',
+    '送财童子上线：+2000，耻辱币 +1',
+    '人形 ATM 已充值：+2000，耻辱币 +1',
+    '朋友们谢谢你：+2000，耻辱币 +1',
+    '钱多任性：+2000，耻辱币 +1',
+  ];
+  Materialize.toast(lines[Math.floor(Math.random() * lines.length)], 3500);
 });
 
 socket.on('playerRebuy', function (data) {
@@ -614,12 +653,19 @@ socket.on('dealt', function (data) {
 socket.on('actionSound', function (data) {
   if (data && data.seq > lastActionSeq) {
     playActionSound(data.move);
+    showActionPopup(data.player, data.move, data.amount);
     lastActionSeq = data.seq;
   }
 });
 
 socket.on('rerender', function (data) {
   myUsername = data.username;
+  // Clear any lingering action popups. Popups on opponent seats get wiped when
+  // the seats are rebuilt below, but the hero's popup survives renderSelf, so
+  // without this it would persist into the ready-up phase and look like it
+  // "keeps popping up" on every re-render. New popups arrive via actionSound,
+  // which fires after this rerender, so this never clobbers a fresh popup.
+  $('.action-popup').remove();
   // A new hand is starting — clear last hand's winner highlight.
   $('.seat-winner').removeClass('seat-winner');
   var nameLabel = data.username + shameCoinsHtml(data.buyIns);
@@ -934,19 +980,13 @@ var check = function () {
 };
 
 var raise = function () {
-  if (
-    parseInt($('#raiseRangeSlider').val()) == $('#raiseRangeSlider').prop('min')
-  ) {
-    Materialize.toast(
-      'You must raise higher than the current top bet! Try again.',
-      4000
-    );
-  } else {
-    socket.emit('moveMade', {
-      move: 'raise',
-      bet: parseInt($('#raiseRangeSlider').val()),
-    });
+  var val = parseInt($('#raiseRangeSlider').val());
+  var min = parseInt($('#raiseRangeSlider').prop('min'));
+  if (val < min) {
+    Materialize.toast('加注金额过低，最小加注到 $' + min, 3000);
+    return;
   }
+  socket.emit('moveMade', { move: 'raise', bet: val });
 };
 
 function renderCard(card) {
@@ -980,6 +1020,71 @@ function renderCard(card) {
       card.suit +
       '</div>'
     );
+}
+
+function actionLabel(move, amount) {
+  if (move === 'fold') return '🚪 弃牌';
+  if (move === 'check') return '✋ 过牌';
+  if (move === 'call') return '💰 跟注';
+  if (move === 'bet') return '💸 下注 $' + amount;
+  if (move === 'raise') return '🔥 加注 $' + amount;
+  return move;
+}
+
+// Pop a bold action label above the acting player's seat so everyone sees the
+// move (fold/check/call/bet/raise) at a glance.
+function showActionPopup(playerName, move, amount) {
+  var $seat =
+    playerName === myUsername
+      ? $('#playerInformationCard')
+      : $('#opponentCards .table-seat').filter(function () {
+          return $(this).attr('data-name') === playerName;
+        });
+  if (!$seat || !$seat.length) return;
+  $seat.find('.action-popup').remove();
+  var $popup = $(
+    '<div class="action-popup action-' + move + '">' +
+      actionLabel(move, amount) +
+      '</div>'
+  );
+  $seat.append($popup);
+  setTimeout(function () {
+    $popup.remove();
+  }, 1800);
+  // Bet/call/raise also fling chips from the seat into the pot.
+  if (move === 'bet' || move === 'call' || move === 'raise') {
+    flyChipsToPot($seat);
+  }
+}
+
+// Chips flying from a player's seat into the pot (bet/call/raise).
+function flyChipsToPot($fromSeat) {
+  var $pot = $('.pot-area');
+  if (!$pot.length || !$fromSeat || !$fromSeat.length) return;
+  var pr = $pot[0].getBoundingClientRect();
+  var sr = $fromSeat[0].getBoundingClientRect();
+  var fromX = sr.left + sr.width / 2;
+  var fromY = sr.top + sr.height / 2;
+  var toX = pr.left + pr.width / 2;
+  var toY = pr.top + pr.height / 2;
+  var dx = toX - fromX;
+  var dy = toY - fromY;
+  for (var i = 0; i < 6; i++) {
+    var $chip = $('<div class="fly-chip"></div>');
+    $chip.css({ left: fromX + 'px', top: fromY + 'px' });
+    $('body').append($chip);
+    (function ($c, dx, dy, delay) {
+      setTimeout(function () {
+        $c.css({
+          transform: 'translate(' + dx + 'px,' + dy + 'px) scale(0.6)',
+          opacity: '0',
+        });
+      }, delay);
+      setTimeout(function () {
+        $c.remove();
+      }, delay + 650);
+    })($chip, dx + (Math.random() * 20 - 10), dy + (Math.random() * 20 - 10), i * 50);
+  }
 }
 
 function getWinnerEl(name, myName) {
@@ -1043,7 +1148,10 @@ function renderSeat(name, data, style) {
     ? '<span class="seat-blind">' + abbrevBlind(data.blind) + '</span>'
     : '';
   var cardsHtml;
-  if (data.showCards && data.cards) {
+  if (data.text === 'Spectating' || data.endHand === 'Spectating') {
+    // 旁观者这手不参与，不显示牌位
+    cardsHtml = '';
+  } else if (data.showCards && data.cards && data.cards.length) {
     cardsHtml =
       renderOpponentCard(data.cards[0]) + renderOpponentCard(data.cards[1]);
   } else {
@@ -1158,21 +1266,27 @@ function updateBetModal() {
 
 function updateRaiseDisplay() {
   $('#raiseDisplay').html(
-    '<h3 class="center-align">Raise top bet to $' +
+    '<h3 class="center-align">加注到 $' +
       $('#raiseRangeSlider').val() +
       '</h3>'
   );
 }
 
 socket.on('updateRaiseModal', function (data) {
-  $('#raiseRangeSlider').attr({
-    max: data.usernameMoney,
-    min: data.topBet,
-  });
+  var minRaise = data.minRaise || data.topBet;
+  // If the player can't afford a full min-raise, the slider lets them go all-in.
+  var sliderMin =
+    data.usernameMoney >= minRaise ? minRaise : data.usernameMoney;
+  sliderMin = Math.max(data.topBet, sliderMin);
+  var $slider = $('#raiseRangeSlider');
+  $slider.attr({ max: data.usernameMoney, min: sliderMin });
+  $slider.val(sliderMin); // default to the minimum raise, show the amount right away
+  updateRaiseDisplay();
 });
 
 function updateRaiseModal() {
   document.getElementById('raiseRangeSlider').value = 0;
+  $('#raiseDisplay').html('<h3 class="center-align">…</h3>');
   socket.emit('raiseModalData', {});
 }
 

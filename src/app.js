@@ -136,6 +136,7 @@ io.on('connection', (socket) => {
         usernameMoney:
           game.getPlayerBetInStage(game.findPlayer(socket.id)) +
           game.findPlayer(socket.id).getMoney(),
+        minRaise: game.getCurrentTopBet() + game.lastRaiseSize,
       });
     }
   });
@@ -167,7 +168,7 @@ io.on('connection', (socket) => {
     else if (data.move == 'call') ok = game.call(socket);
     else if (data.move == 'raise') ok = game.raise(socket, data.bet);
     // Broadcast the resolved action so every client can play its sound.
-    if (ok) game.recordAction(data.move, socket);
+    if (ok) game.recordAction(data.move, socket, data.bet);
   });
 
   socket.on('rebuy', () => {

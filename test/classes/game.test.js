@@ -442,15 +442,18 @@ test('Test raise', () => {
   expect(game.bet(currentPlayer.socket, 30)).toBe(true);
 
   currentPlayer = game.players.filter((p) => p.status === 'Their Turn')[0];
-  // Check can't raise under topBet
+  // Can't raise under the current top bet (30)
   expect(game.raise(currentPlayer.socket, 20)).not.toBe(true);
+  // Min-raise: the raise increment must be >= the previous raise size (30,
+  // from the bet of 30), so raising to 50 (only +20) is rejected.
+  expect(game.raise(currentPlayer.socket, 50)).not.toBe(true);
   expect(game.roundNum).toBe(1);
   expect(game.roundData.bets.length).toBe(1);
 
-  // Raise correct value
-  expect(game.raise(currentPlayer.socket, 30)).toBe(true);
+  // Raising to 60 (topBet 30 + lastRaiseSize 30) is the legal minimum raise.
+  expect(game.raise(currentPlayer.socket, 60)).toBe(true);
   expect(game.roundNum).toBe(1);
-  expect(game.roundData.bets.length).toBe(2);
+  expect(game.roundData.bets.length).toBe(1); // preflop continues; the bettor must call
 });
 
 test('Test all-in 3 players low credits win', () => {

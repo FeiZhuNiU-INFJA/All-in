@@ -38,6 +38,7 @@ const Game = function (name, host) {
   this.debug = false;
   this.smallBlind = 1;
   this.bigBlind = 2;
+  this.lastRaiseSize = this.bigBlind;
 
   const constructor = (function () {})(this);
 
@@ -88,6 +89,9 @@ const Game = function (name, host) {
     const goFirstIndex = this.roundData.smallBlind;
     this.roundData.turn = this.players[goFirstIndex].getUsername();
     this.players[goFirstIndex].setStatus('Their Turn');
+    // Preflop the big blind is the opening bet, so the first raise must add at
+    // least one big blind (i.e. raise to >= 2x the big blind).
+    this.lastRaiseSize = this.bigBlind;
   };
 
   // A next hand can begin once every funded (money > 0) player has resolved
@@ -105,13 +109,14 @@ const Game = function (name, host) {
   // This is decoupled from rerender on purpose: end-of-hand paths
   // (all-fold -> endHand, showdown -> reveal) never emit a rerender, so
   // piggybacking the sound on rerender would drop the final action's sound.
-  this.recordAction = (move, socket) => {
+  this.recordAction = (move, socket, amount) => {
     const player = this.findPlayer(socket.id);
     this.actionSeq++;
     this.emitPlayers('actionSound', {
       move: move,
       player: player ? player.getUsername() : '',
       seq: this.actionSeq,
+      amount: typeof amount === 'number' ? amount : null,
     });
   };
 
@@ -432,44 +437,46 @@ const Game = function (name, host) {
       }
     }
     this.roundData.bets.push([]);
+    // New betting round (flop/turn/river): the minimum raise resets to the big blind.
+    this.lastRaiseSize = this.bigBlind;
   };
 
   this.moveOntoNextPlayer = () => {
     let handOver = false;
     if (this.isStageComplete()) {
       this.log('stage complete');
-      if (this.allPlayersAllIn()) {
-        this.log(' all players all in');
-        this.runoutCards = 0;
-        if (this.roundData.bets.length == 1) {
-          this.community.push(this.deck.dealRandomCard());
-          this.community.push(this.deck.dealRandomCard());
-          this.community.push(this.deck.dealRandomCard());
-          this.roundData.bets.push([]);
-          this.runoutCards += 3;
-        }
-        if (this.roundData.bets.length == 2) {
-          this.community.push(this.deck.dealRandomCard());
-          this.roundData.bets.push([]);
-          this.runoutCards += 1;
-        }
-        if (this.roundData.bets.length == 3) {
-          this.community.push(this.deck.dealRandomCard());
-          this.roundData.bets.push([]);
-          this.runoutCards += 1;
-        }
-        this.rerender();
-      }
-      // stage-by-stage logic.
-      // check if everyone folded but one
+      // If only one player remains (e.g. someone timed out and auto-folded),
+      // end the hand immediately — do NOT run out community cards / deal.
       const [numNonFolds, nonFolderPlayer] = this.getNonFoldedPlayer();
       if (numNonFolds == 1) {
-        // everyone folded, start new round, give pot to player
         this.log('everyone folded except one');
         nonFolderPlayer.money = this.getCurrentPot() + nonFolderPlayer.money;
         this.endHandAllFold(nonFolderPlayer.getUsername());
         handOver = true;
       } else {
+        if (this.allPlayersAllIn()) {
+          this.log(' all players all in');
+          this.runoutCards = 0;
+          if (this.roundData.bets.length == 1) {
+            this.community.push(this.deck.dealRandomCard());
+            this.community.push(this.deck.dealRandomCard());
+            this.community.push(this.deck.dealRandomCard());
+            this.roundData.bets.push([]);
+            this.runoutCards += 3;
+          }
+          if (this.roundData.bets.length == 2) {
+            this.community.push(this.deck.dealRandomCard());
+            this.roundData.bets.push([]);
+            this.runoutCards += 1;
+          }
+          if (this.roundData.bets.length == 3) {
+            this.community.push(this.deck.dealRandomCard());
+            this.roundData.bets.push([]);
+            this.runoutCards += 1;
+          }
+          this.rerender();
+        }
+        // stage-by-stage logic.
         if (this.roundData.bets.length == 1) {
           this.community.push(this.deck.dealRandomCard());
           this.community.push(this.deck.dealRandomCard());
@@ -867,7 +874,9 @@ const Game = function (name, host) {
     for (pn of this.players) {
       pn.setReadyState(pn.getMoney() > 0 ? 'ready' : 'undecided');
     }
-    this.dealCards();
+    // Note: no dealCards() here — startNewRound() below sets `spectating` first
+    // and then deals, so broke/watching players are correctly skipped. Dealing
+    // here would deal to everyone (spectating not yet set).
     this.emitPlayers('startGame', {
       players: this.players.map((p) => {
         return p.username;
@@ -1185,6 +1194,7 @@ const Game = function (name, host) {
         });
         player.money = player.money - bet;
         if (player.money == 0) player.allIn = true;
+        this.lastRaiseSize = bet; // an opening bet sets the new min-raise increment
         this.moveOntoNextPlayer();
         return true;
       }
@@ -1226,10 +1236,15 @@ const Game = function (name, host) {
     const player = this.findPlayer(socket.id);
     const currBet = this.getPlayerBetInStage(player);
     const moneyToRemove = bet - currBet;
+    const raiseIncrement = bet - topBet;
+    const isAllIn = player.getMoney() - moneyToRemove === 0;
     if (
       moneyToRemove > 0 &&
       bet >= topBet &&
-      player.getMoney() - moneyToRemove >= 0
+      player.getMoney() - moneyToRemove >= 0 &&
+      // Min-raise: the raise increment must be >= the previous raise size.
+      // All-in for less is allowed (but doesn't reopen the betting).
+      (isAllIn || raiseIncrement >= this.lastRaiseSize)
     ) {
       if (currBet === 0) {
         this.setCurrentRoundBets(
@@ -1252,6 +1267,7 @@ const Game = function (name, host) {
       }
       player.money -= moneyToRemove;
       if (player.money == 0) player.allIn = true;
+      if (raiseIncrement >= this.lastRaiseSize) this.lastRaiseSize = raiseIncrement;
       this.moveOntoNextPlayer();
       return true;
     }
