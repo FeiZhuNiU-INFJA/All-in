@@ -35,6 +35,12 @@ app.use('/', express.static(__dirname + '/client'));
 
 let rooms = [];
 
+// Persistent lobby: a fixed room (code 2026) that always exists, so friends
+// can jump straight in without anyone having to create it first.
+const persistentLobby = new Game('2026', '');
+persistentLobby.persistent = true;
+rooms.push(persistentLobby);
+
 io.on('connection', (socket) => {
   console.log('new connection ', socket.id);
   socket.on('host', (data) => {
@@ -78,11 +84,20 @@ io.on('connection', (socket) => {
     game.emitPlayers('joinRoom', {
       host: game.getHostName(),
       players: game.getPlayersArray(),
+      code: data.code,
+      persistent: game.persistent,
     });
     game.emitPlayers('hostRoom', {
       code: data.code,
       players: game.getPlayersArray(),
     });
+    // Late join: if the game already started, drop the new player straight
+    // onto the table. They have no cards this hand (sit out), then ready-up
+    // for the next hand like everyone else.
+    if (game.started) {
+      socket.emit('gameBegin', { ok: true, code: data.code });
+      game.rerender();
+    }
   });
 
   socket.on('startGame', (data) => {
@@ -91,6 +106,10 @@ io.on('connection', (socket) => {
     const err = validateStart(game);
     if (err) {
       socket.emit('gameBegin', { ok: false, error: err });
+      return;
+    }
+    if (game.started) {
+      socket.emit('gameBegin', { ok: false, error: 'already_started' });
       return;
     }
     game.emitPlayers('gameBegin', { ok: true, code });
@@ -137,21 +156,18 @@ io.on('connection', (socket) => {
       (r) => r.findPlayer(socket.id).socket.id === socket.id
     );
 
-    if (game != undefined) {
-      if (data.move == 'fold') {
-        game.fold(socket);
-      } else if (data.move == 'check') {
-        game.check(socket);
-      } else if (data.move == 'bet') {
-        game.bet(socket, data.bet);
-      } else if (data.move == 'call') {
-        game.call(socket);
-      } else if (data.move == 'raise') {
-        game.raise(socket, data.bet);
-      }
-    } else {
+    if (game == undefined) {
       console.log("ERROR: can't find game!!!");
+      return;
     }
+    let ok = false;
+    if (data.move == 'fold') ok = game.fold(socket);
+    else if (data.move == 'check') ok = game.check(socket);
+    else if (data.move == 'bet') ok = game.bet(socket, data.bet);
+    else if (data.move == 'call') ok = game.call(socket);
+    else if (data.move == 'raise') ok = game.raise(socket, data.bet);
+    // Broadcast the resolved action so every client can play its sound.
+    if (ok) game.recordAction(data.move, socket);
   });
 
   socket.on('rebuy', () => {
@@ -177,7 +193,18 @@ io.on('connection', (socket) => {
       const player = game.findPlayer(socket.id);
       game.disconnectPlayer(player);
       if (game.players.length == 0) {
-        rooms = rooms.filter((a) => a != game);
+        if (game.persistent) {
+          // Keep the persistent lobby open but reset it for the next group.
+          const code = game.getCode();
+          rooms = rooms.map((r) => {
+            if (r !== game) return r;
+            const fresh = new Game(code, '');
+            fresh.persistent = true;
+            return fresh;
+          });
+        } else {
+          rooms = rooms.filter((a) => a != game);
+        }
       }
     }
   });

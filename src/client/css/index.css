@@ -146,6 +146,18 @@ code {
   border-bottom: 1px solid rgba(255, 255, 255, 0.3) !important;
 }
 
+/* Browsers paint a white box over autofilled inputs (e.g. picking a saved
+   name from the dropdown), which clashes with the dark modal. Force the
+   autofill state back to the panel colour and keep the text white. */
+.lobby-modal .input-field input:-webkit-autofill,
+.lobby-modal .input-field input:-webkit-autofill:hover,
+.lobby-modal .input-field input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #ffffff;
+  caret-color: #ffffff;
+  -webkit-box-shadow: 0 0 0 1000px #1a2e22 inset;
+  transition: background-color 9999s ease-out 9999s;
+}
+
 .modal-action-btn {
   display: inline-block;
   padding: 10px 20px;
@@ -206,6 +218,14 @@ body.modal-open {
 .table-hud-stage {
   font-size: 0.85rem;
   opacity: 0.65;
+  margin-top: 2px;
+}
+
+.table-hud-countdown {
+  font-size: 0.85rem;
+  color: #ffe066;
+  font-weight: 600;
+  min-height: 1.2em;
   margin-top: 2px;
 }
 
@@ -413,6 +433,47 @@ body.modal-open {
 
 .seat-status.seat-watching {
   color: #cfcfcf;
+}
+
+/* ── Winner highlight & chip collection ───────────────── */
+
+/* The winner's seat glows gold; applied to a .table-seat or the hero seat. */
+.seat-winner {
+  z-index: 10;
+  animation: winner-glow 1s ease-in-out infinite;
+}
+
+@keyframes winner-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 6px rgba(246, 226, 122, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(246, 226, 122, 1));
+  }
+}
+
+.hero-seat.seat-winner {
+  border-color: rgba(246, 226, 122, 0.95) !important;
+  box-shadow: 0 0 30px rgba(246, 226, 122, 0.75) !important;
+  transform: scale(1.03);
+}
+
+/* A chip flying from the pot to the winner. Positioned fixed in the viewport
+   and moved via transform/opacity transitions. */
+.fly-chip {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  margin-top: -9px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #f6e27a, #b8860b 60%, #6b4f0e);
+  border: 1px solid #5c440c;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.55);
+  z-index: 500;
+  pointer-events: none;
+  transition: transform 0.55s cubic-bezier(0.3, 0.1, 0.3, 1), opacity 0.55s ease-out;
 }
 
 /* ── Hero Panel ───────────────────────────────────────── */
@@ -715,6 +776,44 @@ body.modal-open {
   height: 88px;
   width: 60px;
   font-size: 1.15rem;
+}
+
+/* ── Deal animation ───────────────────────────────────── */
+
+@keyframes deal-in {
+  0% {
+    transform: translate(0, -130px) scale(0.72) rotate(-6deg);
+    opacity: 0;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+/* A card dealt from the deck: flies in from above. Applied alongside the
+   playingCard_* class; the inline animation-delay staggers a round of deals. */
+.deal-in {
+  animation: deal-in 0.5s cubic-bezier(0.2, 0.85, 0.3, 1) backwards;
+}
+
+@media (max-width: 600px) {
+  @keyframes deal-in {
+    0% {
+      transform: translate(0, -90px) scale(0.72) rotate(-6deg);
+      opacity: 0;
+    }
+    55% {
+      opacity: 1;
+    }
+    100% {
+      transform: translate(0, 0) scale(1) rotate(0deg);
+      opacity: 1;
+    }
+  }
 }
 
 /* ── Shame Coins & Rebuy ──────────────────────────────── */

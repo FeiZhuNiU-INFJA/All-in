@@ -29,6 +29,12 @@ const Game = function (name, host) {
   this.disconnectedPlayers = [];
   this.autoBuyIns = false;
   this.lastRebuyError = null;
+  this.actionSeq = 0;
+  this.started = false;
+  this.persistent = false;
+  this.runoutCards = 0;
+  this.turnTimer = null;
+  this.readyTimer = null;
   this.debug = false;
   this.smallBlind = 1;
   this.bigBlind = 2;
@@ -95,7 +101,79 @@ const Game = function (name, host) {
     return undecidedCount === 0 && readyCount >= 2;
   };
 
+  // Record a successful player action and broadcast a dedicated sound event.
+  // This is decoupled from rerender on purpose: end-of-hand paths
+  // (all-fold -> endHand, showdown -> reveal) never emit a rerender, so
+  // piggybacking the sound on rerender would drop the final action's sound.
+  this.recordAction = (move, socket) => {
+    const player = this.findPlayer(socket.id);
+    this.actionSeq++;
+    this.emitPlayers('actionSound', {
+      move: move,
+      player: player ? player.getUsername() : '',
+      seq: this.actionSeq,
+    });
+  };
+
+  // Per-turn auto-act: if the player whose turn it is doesn't act within the
+  // limit, auto check (when free) or fold for them. Re-armed on every rerender,
+  // so each new turn resets the clock.
+  this.scheduleTurnTimeout = () => {
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
+    if (!this.roundInProgress) return;
+    const turnPlayer = this.players.find((p) => p.getStatus() === 'Their Turn');
+    if (!turnPlayer) return;
+    this.turnTimer = setTimeout(() => this.autoAct(turnPlayer), 120000);
+  };
+
+  this.autoAct = (player) => {
+    if (!this.roundInProgress || player.getStatus() !== 'Their Turn') return;
+    const moves = this.getPossibleMoves(player.socket);
+    const move = moves.check === 'yes' ? 'check' : 'fold';
+    if (move === 'check') this.check(player.socket);
+    else this.fold(player.socket);
+    // Play the action sound just like a manual move.
+    this.actionSeq++;
+    this.emitPlayers('actionSound', {
+      move: move,
+      player: player.getUsername(),
+      seq: this.actionSeq,
+    });
+  };
+
+  // Ready-up phase timeout: if the ready-up drags on (someone AFK), auto-set
+  // every still-undecided funded player to 'watching' so the table can proceed.
+  this.startReadyTimeout = () => {
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
+    this.readyTimer = setTimeout(() => this.autoWatch(), 120000);
+  };
+
+  this.autoWatch = () => {
+    this.readyTimer = null;
+    if (this.roundInProgress) return;
+    let changed = false;
+    this.players.forEach((p) => {
+      if (p.getMoney() > 0 && p.getReadyState() === 'undecided') {
+        p.setReadyState('watching');
+        changed = true;
+      }
+    });
+    if (!changed) return;
+    if (this.canStartNextHand()) this.startNewRound();
+    else this.rerender();
+  };
+
   this.startNewRound = () => {
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
     this.lastMoveParsed = { move: '', player: '' };
     this.foldPot = 0;
     this.bigBlindWent = false;
@@ -226,6 +304,7 @@ const Game = function (name, host) {
         buyIns: this.players[pn].buyIns,
       });
     }
+    this.scheduleTurnTimeout();
   };
 
   this.getCurrentPot = () => {
@@ -361,19 +440,23 @@ const Game = function (name, host) {
       this.log('stage complete');
       if (this.allPlayersAllIn()) {
         this.log(' all players all in');
+        this.runoutCards = 0;
         if (this.roundData.bets.length == 1) {
           this.community.push(this.deck.dealRandomCard());
           this.community.push(this.deck.dealRandomCard());
           this.community.push(this.deck.dealRandomCard());
           this.roundData.bets.push([]);
+          this.runoutCards += 3;
         }
         if (this.roundData.bets.length == 2) {
           this.community.push(this.deck.dealRandomCard());
           this.roundData.bets.push([]);
+          this.runoutCards += 1;
         }
         if (this.roundData.bets.length == 3) {
           this.community.push(this.deck.dealRandomCard());
           this.roundData.bets.push([]);
+          this.runoutCards += 1;
         }
         this.rerender();
       }
@@ -405,7 +488,14 @@ const Game = function (name, host) {
             playerResult.player.setStatus(playerResult.hand.name);
           }
           const winningData = this.distributeMoney(roundResults);
-          this.revealCards(winningData.filter((a) => a.winner));
+          this.roundInProgress = false; // hand is over now; only the reveal broadcast is delayed
+          const winners = winningData.filter((a) => a.winner);
+          // Delay the reveal until the final deal animation (river card, or the
+          // all-in runout cards) finishes — otherwise the winner pops up while
+          // the last cards are still flying in. More runout cards = longer wait.
+          const dealMs = this.runoutCards > 0 ? this.runoutCards * 280 + 700 : 350;
+          this.runoutCards = 0;
+          setTimeout(() => this.revealCards(winners), dealMs);
         } else {
           this.log('This stage of the round is INVALID!!');
         }
@@ -656,6 +746,7 @@ const Game = function (name, host) {
         roundInProgress: this.roundInProgress,
       });
     }
+    this.startReadyTimeout();
   };
 
   this.revealCards = (winners) => {
@@ -688,6 +779,7 @@ const Game = function (name, host) {
         roundInProgress: this.roundInProgress,
       });
     }
+    this.startReadyTimeout();
   };
 
   this.allPlayersAllIn = () => {
@@ -769,6 +861,7 @@ const Game = function (name, host) {
   };
 
   this.startGame = () => {
+    this.started = true;
     // The host chose to start, so treat every funded player as 'ready' for
     // the first hand (seeds an immediate deal when >= 2 are funded).
     for (pn of this.players) {

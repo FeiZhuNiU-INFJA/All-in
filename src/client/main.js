@@ -66,6 +66,250 @@ var gameInfo = null;
 var myUsername = '';
 var roomCode = '';
 
+/* ── Deal animation & sound ──────────────────────────── */
+var lastCommunityCount = 0; // community cards already shown — animate only new ones
+var pendingDealAnim = false; // set on 'dealt' so the next rerender animates opponents' cards
+var lastActionSeq = 0; // last action sound played — de-dupe across rerenders
+var countdownInterval = null;
+var countdownKind = null;
+var countdownSecs = 0;
+
+// Local countdown shown to players (turn timer / ready-up timer). The server
+// remains the source of truth for the actual timeout; this is just a display.
+function clearCountdown() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+  countdownKind = null;
+  $('#countdown').empty();
+}
+
+function startCountdown(kind, secs, label) {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+  countdownKind = kind;
+  countdownSecs = secs;
+  var render = function () {
+    $('#countdown').text(label + ' ⏱ ' + countdownSecs + 's');
+  };
+  render();
+  countdownInterval = setInterval(function () {
+    countdownSecs -= 1;
+    if (countdownSecs <= 0) {
+      clearCountdown();
+      return;
+    }
+    render();
+  }, 1000);
+}
+
+var audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      audioCtx = null;
+    }
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+// Browsers block audio until a user gesture; unlock on the first interaction.
+$(document).one('click pointerdown keydown', ensureAudio);
+
+// Synthesized "card hitting the felt": a short, decaying filtered noise burst.
+// No external audio file, so it works fully offline on the LAN.
+function playDealSound() {
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var dur = 0.09;
+  var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+  var d = buf.getChannelData(0);
+  for (var i = 0; i < d.length; i++) {
+    d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2.2);
+  }
+  var src = ctx.createBufferSource();
+  src.buffer = buf;
+  var hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 1100;
+  var g = ctx.createGain();
+  g.gain.value = 0.32;
+  src.connect(hp);
+  hp.connect(g);
+  g.connect(ctx.destination);
+  src.start();
+}
+
+// Chips clinking — a bet or a raise (a few chips stacking, scheduled on the
+// audio clock so the clinks stay tight regardless of JS timing).
+function playChipsSound() {
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  for (var k = 0; k < 3; k++) {
+    var t0 = ctx.currentTime + k * 0.045;
+    var dur = 0.05;
+    var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i = 0; i < d.length; i++)
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    var bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 2300 - k * 350;
+    bp.Q.value = 1.2;
+    var g = ctx.createGain();
+    g.gain.value = 0.28;
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(ctx.destination);
+    src.start(t0);
+  }
+}
+
+// Coins showering down — a bet. Each coin is a metallic clink: a short noise
+// transient (the strike) plus a triangle-wave resonance with harmonics and a
+// longer ringing decay, randomly pitched, so it reads as coins clattering.
+function playCoinsSound() {
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var n = 4;
+  for (var k = 0; k < n; k++) {
+    var t0 = ctx.currentTime + k * 0.08 + Math.random() * 0.03;
+    // strike transient
+    var durN = 0.025;
+    var bufN = ctx.createBuffer(1, Math.floor(ctx.sampleRate * durN), ctx.sampleRate);
+    var dN = bufN.getChannelData(0);
+    for (var i = 0; i < dN.length; i++)
+      dN[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / dN.length, 4);
+    var srcN = ctx.createBufferSource();
+    srcN.buffer = bufN;
+    var hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 3200;
+    var gN = ctx.createGain();
+    gN.gain.value = 0.22;
+    srcN.connect(hp);
+    hp.connect(gN);
+    gN.connect(ctx.destination);
+    srcN.start(t0);
+    // ringing resonance
+    var osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = 2400 + Math.random() * 1100;
+    var og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t0);
+    og.gain.exponentialRampToValueAtTime(0.2, t0 + 0.002);
+    og.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
+    osc.connect(og);
+    og.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.22);
+  }
+}
+
+// A single chip placed — a call.
+function playCallSound() {
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var dur = 0.06;
+  var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+  var d = buf.getChannelData(0);
+  for (var i = 0; i < d.length; i++)
+    d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2.5);
+  var src = ctx.createBufferSource();
+  src.buffer = buf;
+  var bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 1700;
+  bp.Q.value = 1;
+  var g = ctx.createGain();
+  g.gain.value = 0.32;
+  src.connect(bp);
+  bp.connect(g);
+  g.connect(ctx.destination);
+  src.start();
+}
+
+// A knuckle on the felt — a check.
+function playCheckSound() {
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var t0 = ctx.currentTime;
+  var osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.value = 180;
+  var g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(0.4, t0 + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+  osc.connect(g);
+  g.connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + 0.13);
+}
+
+// A card slid away — a fold (filtered noise swept high→low).
+function playFoldSound() {
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var dur = 0.18;
+  var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+  var d = buf.getChannelData(0);
+  for (var i = 0; i < d.length; i++)
+    d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 1.4);
+  var src = ctx.createBufferSource();
+  src.buffer = buf;
+  var bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.Q.value = 0.8;
+  bp.frequency.setValueAtTime(2400, ctx.currentTime);
+  bp.frequency.exponentialRampToValueAtTime(500, ctx.currentTime + dur);
+  var g = ctx.createGain();
+  g.gain.value = 0.26;
+  src.connect(bp);
+  bp.connect(g);
+  g.connect(ctx.destination);
+  src.start();
+}
+
+function playActionSound(move) {
+  if (move === 'fold') return playFoldSound();
+  if (move === 'check') return playCheckSound();
+  if (move === 'bet' || move === 'call') return playCoinsSound();
+  if (move === 'raise') return playChipsSound();
+}
+
+// A playing card carrying the deal-in animation class, with an optional
+// stagger delay (seconds) so a round of deals plays one after another.
+function renderCardWithAnim(card, delaySec) {
+  var cls =
+    card.suit === '♠' || card.suit === '♣'
+      ? 'playingCard_black deal-in'
+      : 'playingCard_red deal-in';
+  var style = delaySec ? ' style="animation-delay:' + delaySec + 's"' : '';
+  return (
+    '<div class="' +
+    cls +
+    '"' +
+    style +
+    ' data-value="' +
+    card.value +
+    ' ' +
+    card.suit +
+    '">' +
+    card.value +
+    ' ' +
+    card.suit +
+    '</div>'
+  );
+}
+
 /* Seat positions around the oval table (top %, left %) */
 var SEAT_LAYOUTS = [
   [],
@@ -323,11 +567,24 @@ socket.on('joinRoom', function (data) {
     $('#hostButton').removeClass('disabled');
   } else {
     roomCode = String($('#code-field').val()).trim();
-    $('#joinModalContent').html(
-      '<h5>' +
-        data.host +
-        "'s room</h5><hr /><h5>Players Currently in Room</h5><p>Please wait until your host starts the game. Leaving the page, refreshing, or going back will disconnect you from the game. </p>"
-    );
+    if (data.persistent) {
+      // Persistent lobby: no fixed host, anyone can start once >= 2 are in.
+      $('#joinModalContent').html(
+        '<h5>房间已就绪</h5><hr /><h5>Players Currently in Room</h5>'
+      );
+      var needMore = !data.players || data.players.length < 2;
+      $('#startGameAreaDisconnectSituation').html(
+        needMore
+          ? '<p style="opacity:.7">等待至少 2 位玩家加入…</p>'
+          : '<br /><button type="button" onclick="startGame()" class="modal-action-btn">Start Game</button>'
+      );
+    } else {
+      $('#joinModalContent').html(
+        '<h5>' +
+          data.host +
+          "'s room</h5><hr /><h5>Players Currently in Room</h5><p>Please wait until your host starts the game. Leaving the page, refreshing, or going back will disconnect you from the game. </p>"
+      );
+    }
     $('#playersNamesJoined').html(
       data.players.map(function (p) {
         return '<span>' + p + '</span><br />';
@@ -339,26 +596,53 @@ socket.on('joinRoom', function (data) {
 socket.on('dealt', function (data) {
   myUsername = data.username;
   $('#mycards').html(
-    data.cards.map(function (c) {
-      return renderCard(c);
+    data.cards.map(function (c, i) {
+      // Hole cards: ~0.6s apart; sound when each LANDS (deal delay + 0.5s flight).
+      setTimeout(playDealSound, 500 + i * 600);
+      return renderCardWithAnim(c, i * 0.6);
     })
   );
+  lastCommunityCount = 0; // new hand: community is empty again
+  pendingDealAnim = true; // opponents' face-down cards animate on the next rerender
   $('#usernamesCards').html(data.username + shameCoinsHtml(0));
   $('#mainContent').remove();
 });
 
+// A player action resolved (fold/check/bet/call/raise). Played via a dedicated
+// event — not rerender — so it fires even on all-fold/showdown, and so a deal
+// sound that follows (next street) can be staggered AFTER it.
+socket.on('actionSound', function (data) {
+  if (data && data.seq > lastActionSeq) {
+    playActionSound(data.move);
+    lastActionSeq = data.seq;
+  }
+});
+
 socket.on('rerender', function (data) {
   myUsername = data.username;
+  // A new hand is starting — clear last hand's winner highlight.
+  $('.seat-winner').removeClass('seat-winner');
   var nameLabel = data.username + shameCoinsHtml(data.buyIns);
   if (data.myBet > 0) nameLabel += ' · Bet $' + data.myBet;
   $('#usernamesCards').html(nameLabel);
-  if (data.community != undefined)
+  if (data.community != undefined) {
+    var prevCommunity = lastCommunityCount;
     $('#communityCards').html(
-      data.community.map(function (c) {
+      data.community.map(function (c, i) {
+        if (i >= prevCommunity) {
+          // After the last check/call, wait 1s, then deal 1 card/sec. Sound fires
+          // when each card LANDS (deal delay + 0.5s flight) so audio matches video.
+          setTimeout(playDealSound, 1500 + (i - prevCommunity) * 1000);
+          return renderCardWithAnim(c, 1.0 + (i - prevCommunity) * 1.0);
+        }
         return renderCard(c);
       })
     );
-  else $('#communityCards').empty();
+    lastCommunityCount = data.community.length;
+  } else {
+    $('#communityCards').empty();
+    lastCommunityCount = 0;
+  }
   if (data.currBet == undefined) data.currBet = 0;
   $('#potAmount').text('$' + data.pot);
   $('#tableStage').text(
@@ -380,6 +664,15 @@ socket.on('rerender', function (data) {
       }, styles[i] || styles[0]);
     }).join('')
   );
+  if (pendingDealAnim) {
+    // A new hand was just dealt — fly opponents' face-down cards in too.
+    var $dealtSeats = $('#opponentCards .blankCard');
+    $dealtSeats.addClass('deal-in');
+    $dealtSeats.each(function (i) {
+      this.style.animationDelay = i * 0.5 + 's';
+    });
+    pendingDealAnim = false;
+  }
   renderSelf({
     money: data.myMoney,
     text: data.myStatus,
@@ -395,6 +688,18 @@ socket.on('rerender', function (data) {
     myReadyState: data.myReadyState,
     players: data.players,
   });
+  // Countdown: during a hand show the acting player's turn timer; the ready-up
+  // timer is started by reveal/endHand and cleared when the next hand begins.
+  if (data.roundInProgress) {
+    if (countdownKind === 'ready') clearCountdown();
+    var turnPlayer = (data.players || []).filter(function (p) {
+      return p.status === 'Their Turn';
+    })[0];
+    if (turnPlayer) startCountdown('turn', 120, turnPlayer.username + ' 操作');
+    else if (countdownKind === 'turn') clearCountdown();
+  } else if (countdownKind === 'turn') {
+    clearCountdown();
+  }
 });
 
 socket.on('gameBegin', function (data) {
@@ -502,6 +807,11 @@ socket.on('reveal', function (data) {
     myReadyState: data.myReadyState,
     players: data.cards,
   });
+  startCountdown('ready', 120, '准备/旁观');
+  highlightWinners(winners, data.username);
+  setTimeout(function () {
+    animateChipsToWinners(winners, data.username);
+  }, 500);
 });
 
 socket.on('endHand', function (data) {
@@ -538,6 +848,11 @@ socket.on('endHand', function (data) {
     myReadyState: data.myReadyState,
     players: data.cards,
   });
+  startCountdown('ready', 120, '准备/旁观');
+  highlightWinners([data.winner], data.username);
+  setTimeout(function () {
+    animateChipsToWinners([data.winner], data.username);
+  }, 400);
 });
 
 var beginHost = function () {
@@ -667,6 +982,59 @@ function renderCard(card) {
     );
 }
 
+function getWinnerEl(name, myName) {
+  if (name === myName) return $('#playerInformationCard');
+  return $('#opponentCards .table-seat').filter(function () {
+    return $(this).attr('data-name') === name;
+  });
+}
+
+// Highlight every winner's seat (handles split pots with multiple winners).
+function highlightWinners(winners, myName) {
+  $('.seat-winner').removeClass('seat-winner');
+  winners.forEach(function (w) {
+    var $el = getWinnerEl(w, myName);
+    if ($el && $el.length) $el.addClass('seat-winner');
+  });
+}
+
+// Spawn gold chips that fly from the pot to the target seat and fade out.
+function flyChipsTo($target) {
+  var $pot = $('.pot-area');
+  if (!$pot.length || !$target || !$target.length) return;
+  var pr = $pot[0].getBoundingClientRect();
+  var tr = $target[0].getBoundingClientRect();
+  var fromX = pr.left + pr.width / 2;
+  var fromY = pr.top + pr.height / 2;
+  var toX = tr.left + tr.width / 2;
+  var toY = tr.top + tr.height / 2;
+  for (var i = 0; i < 8; i++) {
+    var dx = toX - fromX + (Math.random() * 24 - 12);
+    var dy = toY - fromY + (Math.random() * 24 - 12);
+    var $chip = $('<div class="fly-chip"></div>');
+    $chip.css({ left: fromX + 'px', top: fromY + 'px' });
+    $('body').append($chip);
+    (function ($c, dx, dy, delay) {
+      setTimeout(function () {
+        $c.css({
+          transform: 'translate(' + dx + 'px,' + dy + 'px) scale(0.5)',
+          opacity: '0',
+        });
+      }, delay);
+      setTimeout(function () {
+        $c.remove();
+      }, delay + 700);
+    })($chip, dx, dy, i * 55);
+  }
+}
+
+function animateChipsToWinners(winners, myName) {
+  playCoinsSound(); // pot being collected — coins clinking into the winner's stack
+  winners.forEach(function (w) {
+    flyChipsTo(getWinnerEl(w, myName));
+  });
+}
+
 function renderSeat(name, data, style) {
   var bet = getPlayerBet(name, data.bets);
   var stateClass = seatStateClass(data.text);
@@ -706,6 +1074,8 @@ function renderSeat(name, data, style) {
   return (
     '<div class="table-seat ' +
     stateClass +
+    '" data-name="' +
+    name +
     '" style="top:' +
     style.top +
     ';left:' +
