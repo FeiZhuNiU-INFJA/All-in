@@ -121,14 +121,12 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('startNextRound', () => {
+  socket.on('playerReady', (data) => {
     const game = rooms.find(
       (r) => r.findPlayer(socket.id).socket.id === socket.id
     );
     if (game != undefined) {
-      if (game.roundInProgress === false) {
-        game.startNewRound();
-      }
+      game.setReady(socket, data && data.choice);
     }
   });
 

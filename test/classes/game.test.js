@@ -368,6 +368,9 @@ test('Test init blind and dealer', () => {
   expect(p2.blindValue).toBe('Small Blind');
   expect(p3.blindValue).toBe('Big Blind');
 
+  game.players.forEach(function (p) {
+    p.setReadyState('ready');
+  });
   game.startNewRound();
   expect(game.roundNum).toBe(2);
 
@@ -378,6 +381,9 @@ test('Test init blind and dealer', () => {
   expect(p2.blindValue).toBe('');
   expect(p3.blindValue).toBe('Small Blind');
 
+  game.players.forEach(function (p) {
+    p.setReadyState('ready');
+  });
   game.startNewRound();
   expect(game.roundNum).toBe(3);
 
@@ -388,6 +394,9 @@ test('Test init blind and dealer', () => {
   expect(p2.blindValue).toBe('Big Blind');
   expect(p3.blindValue).toBe('');
 
+  game.players.forEach(function (p) {
+    p.setReadyState('ready');
+  });
   game.startNewRound();
   expect(game.roundNum).toBe(4);
 
@@ -1062,4 +1071,201 @@ test('fewer than two funded players pauses instead of dealing a corrupted hand',
   expect(game.community.length).toBe(0);
   // The lone funded player must not have been charged a blind.
   expect(p2.money).toBe(STARTING_CHIPS);
+});
+
+test('rebuy lets a paused two-player game resume on the next hand', () => {
+  // Regression for the "room freezes after a rebuy" bug: with one player broke
+  // the game pauses (fewer than two funded players). After that player rebuys,
+  // starting the next hand must actually deal — otherwise the front-end "Start
+  // Next Hand" button has nothing to resume into and the room stalls forever.
+  const game = new Game('resume-game', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  const s1 = new events.EventEmitter();
+  s1.id = 1;
+  const s2 = new events.EventEmitter();
+  s2.id = 2;
+  const p1 = game.addPlayer('1', s1);
+  const p2 = game.addPlayer('2', s2);
+  p1.money = 0; // broke → not enough funded players to deal
+
+  game.startGame();
+  expect(game.roundInProgress).toBe(false); // paused, waiting on a rebuy
+
+  // p1 rebuys between hands ⇒ defaults to watching (sits out until opt-in)
+  expect(game.rebuy(s1)).toBe(true);
+  expect(p1.money).toBe(STARTING_CHIPS);
+  expect(p1.getReadyState()).toBe('watching');
+
+  // Rebuyer opts back in. p2 is already ready, so the hand auto-starts.
+  expect(game.setReady(s1, 'ready')).toBe(true);
+  expect(game.roundInProgress).toBe(true);
+  expect(game.roundData.bets.length).toBeGreaterThan(0);
+  expect(p1.cards.length).toBe(2);
+  expect(p2.cards.length).toBe(2);
+});
+
+function addMockPlayer(game, id) {
+  const s = new events.EventEmitter();
+  s.id = id;
+  return game.addPlayer(String(id), s);
+}
+
+test('setReady transitions a funded player between ready and watching', () => {
+  const game = new Game('setready-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  game.startGame(); // 1 funded player ⇒ pauses (roundInProgress false)
+  expect(game.roundInProgress).toBe(false);
+  expect(p1.getReadyState()).toBe('ready'); // seeded by startGame
+  expect(game.setReady(p1.socket, 'watching')).toBe(true);
+  expect(p1.getReadyState()).toBe('watching');
+  expect(game.setReady(p1.socket, 'ready')).toBe(true);
+  expect(p1.getReadyState()).toBe('ready');
+});
+
+test('canStartNextHand requires zero undecided and >= 2 ready', () => {
+  const game = new Game('canstart-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  const p2 = addMockPlayer(game, 2);
+  const p3 = addMockPlayer(game, 3);
+
+  expect(game.canStartNextHand()).toBe(false); // all undecided
+  p1.setReadyState('ready');
+  p2.setReadyState('ready');
+  expect(game.canStartNextHand()).toBe(false); // p3 still undecided
+  p3.setReadyState('watching');
+  expect(game.canStartNextHand()).toBe(true); // 0 undecided, 2 ready
+  p2.setReadyState('watching');
+  expect(game.canStartNextHand()).toBe(false); // only 1 ready
+  p1.setReadyState('watching');
+  expect(game.canStartNextHand()).toBe(false); // 0 ready
+});
+
+test('rebuy sets readyState to watching', () => {
+  const game = new Game('rebuy-watch-game', '1');
+  const s1 = new events.EventEmitter();
+  s1.id = 1;
+  const s2 = new events.EventEmitter();
+  s2.id = 2;
+  const p1 = game.addPlayer('1', s1);
+  game.addPlayer('2', s2);
+  p1.money = 0;
+  game.startGame(); // pauses: only '2' is funded
+  expect(game.rebuy(s1)).toBe(true);
+  expect(p1.getReadyState()).toBe('watching');
+});
+
+test('ready resets to undecided when a hand starts; watching persists', () => {
+  const game = new Game('reset-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  const p2 = addMockPlayer(game, 2);
+  const p3 = addMockPlayer(game, 3);
+  p1.setReadyState('ready');
+  p2.setReadyState('ready');
+  p3.setReadyState('watching');
+  game.startNewRound(); // deals to p1,p2; p3 sits out
+  expect(p1.getReadyState()).toBe('undecided');
+  expect(p2.getReadyState()).toBe('undecided');
+  expect(p3.getReadyState()).toBe('watching');
+});
+
+test('startGame deals the first hand with >= 2 funded and pauses otherwise', () => {
+  const g2 = new Game('sg2', '1');
+  addMockPlayer(g2, 1);
+  addMockPlayer(g2, 2);
+  g2.startGame();
+  expect(g2.roundInProgress).toBe(true);
+  expect(g2.roundData.bets.length).toBeGreaterThan(0);
+
+  const g1 = new Game('sg1', '1');
+  addMockPlayer(g1, 1);
+  g1.startGame();
+  expect(g1.roundInProgress).toBe(false);
+});
+
+test('watching persists across hands and is never dealt cards', () => {
+  const game = new Game('persist-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  const p2 = addMockPlayer(game, 2);
+  const p3 = addMockPlayer(game, 3);
+  p1.setReadyState('ready');
+  p2.setReadyState('ready');
+  p3.setReadyState('watching');
+  game.startNewRound(); // hand 1
+  expect(p3.cards.length).toBe(0);
+  expect(p3.getReadyState()).toBe('watching');
+  p1.setReadyState('ready');
+  p2.setReadyState('ready');
+  game.startNewRound(); // hand 2
+  expect(p3.cards.length).toBe(0);
+  expect(p3.getReadyState()).toBe('watching');
+});
+
+test('only ready players are dealt into a hand', () => {
+  const game = new Game('onlyready-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  addMockPlayer(game, 3);
+  p1.setReadyState('watching');
+  game.players[1].setReadyState('ready');
+  game.players[2].setReadyState('ready');
+  game.startNewRound();
+  expect(p1.cards.length).toBe(0);
+  expect(p1.spectating).toBe(true);
+  expect(game.players[1].cards.length).toBe(2);
+  expect(game.players[2].cards.length).toBe(2);
+  const blinded = game.players
+    .filter((p) => p.getBlind() !== '')
+    .map((p) => p.getUsername())
+    .sort();
+  expect(blinded).toEqual(['2', '3']); // p1 not in blind rotation
+});
+
+test('setReady auto-starts the next hand once the condition is met', () => {
+  const game = new Game('autostart-game', '1');
+  addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  game.startGame(); // hand 1 in progress
+  // End hand 1: the small blind folds preflop ⇒ everyone-but-one folds.
+  const small = game.players[game.roundData.smallBlind];
+  game.fold(small.socket);
+  expect(game.roundInProgress).toBe(false);
+  // Both reset to undecided between hands. One ready is not enough.
+  game.setReady(game.players[0].socket, 'ready');
+  expect(game.roundInProgress).toBe(false);
+  game.setReady(game.players[1].socket, 'ready');
+  expect(game.roundInProgress).toBe(true);
+});
+
+test('setReady is rejected mid-hand and for broke players', () => {
+  const game = new Game('reject-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  game.startGame(); // hand 1 in progress
+  expect(game.roundInProgress).toBe(true);
+  expect(game.setReady(p1.socket, 'ready')).toBe(false);
+  expect(p1.getReadyState()).toBe('undecided');
+
+  const g2 = new Game('reject-broke', '1');
+  const s1 = new events.EventEmitter();
+  s1.id = 1;
+  const s2 = new events.EventEmitter();
+  s2.id = 2;
+  const broke = g2.addPlayer('1', s1);
+  g2.addPlayer('2', s2);
+  broke.money = 0;
+  g2.startGame(); // pauses: only '2' funded
+  expect(g2.setReady(s1, 'ready')).toBe(false); // broke ⇒ must rebuy
+  expect(broke.getReadyState()).toBe('undecided');
+});
+
+test('a watching (rebuying) player never blocks the ready-up gate', () => {
+  const game = new Game('noblock-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  addMockPlayer(game, 3);
+  p1.setReadyState('watching'); // funded but watching, like a rebuyer
+  game.players[1].setReadyState('ready');
+  game.players[2].setReadyState('ready');
+  expect(game.canStartNextHand()).toBe(true);
 });

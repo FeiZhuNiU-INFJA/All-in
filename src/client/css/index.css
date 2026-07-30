@@ -407,6 +407,14 @@ body.modal-open {
   opacity: 0.35;
 }
 
+.seat-status.seat-ready {
+  color: #9be38b;
+}
+
+.seat-status.seat-watching {
+  color: #cfcfcf;
+}
+
 /* ── Hero Panel ───────────────────────────────────────── */
 
 .hero-panel {
@@ -593,6 +601,37 @@ body.modal-open {
 .action-raise {
   background: #e67e22;
   color: #fff;
+}
+
+/* ready-up phase between hands */
+.ready-btn {
+  background: #27ae60;
+  color: #fff;
+}
+
+.watch-btn {
+  background: #555;
+  color: #fff;
+}
+
+.action-btn[disabled] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ready-phase {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+.ready-phase-hint {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  width: 100%;
+  text-align: center;
 }
 
 /* ── Playing Cards ────────────────────────────────────── */

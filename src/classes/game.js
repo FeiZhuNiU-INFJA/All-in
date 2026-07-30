@@ -84,6 +84,17 @@ const Game = function (name, host) {
     this.players[goFirstIndex].setStatus('Their Turn');
   };
 
+  // A next hand can begin once every funded (money > 0) player has resolved
+  // their ready-up choice (no 'undecided' left) AND at least two are 'ready'.
+  this.canStartNextHand = () => {
+    const funded = this.players.filter((p) => p.getMoney() > 0);
+    const readyCount = funded.filter((p) => p.getReadyState() === 'ready').length;
+    const undecidedCount = funded.filter(
+      (p) => p.getReadyState() === 'undecided'
+    ).length;
+    return undecidedCount === 0 && readyCount >= 2;
+  };
+
   this.startNewRound = () => {
     this.lastMoveParsed = { move: '', player: '' };
     this.foldPot = 0;
@@ -92,9 +103,10 @@ const Game = function (name, host) {
     this.roundData.turn = '';
     this.roundData.bets = [];
 
-    // Broke players sit out this round until they rebuy.
+    // Only 'ready' funded players are dealt in this hand; everyone else
+    // (broke, watching, or still-undecided) sits out as a spectator.
     for (pn of this.players) {
-      pn.spectating = pn.getMoney() === 0;
+      pn.spectating = !(pn.getMoney() > 0 && pn.getReadyState() === 'ready');
     }
 
     // Never deal/blind a hand with fewer than two funded players: that
@@ -172,6 +184,12 @@ const Game = function (name, host) {
       });
     }
 
+    // A hand just began: 'ready' players must re-confirm next hand, so reset
+    // them to 'undecided'. 'watching' players stay watching (persistent).
+    for (pn of this.players) {
+      if (pn.getReadyState() === 'ready') pn.setReadyState('undecided');
+    }
+
     this.roundNum++;
     this.rerender();
   };
@@ -186,6 +204,7 @@ const Game = function (name, host) {
         money: this.players[pn].getMoney(),
         buyIns: this.players[pn].buyIns,
         isChecked: this.playerIsChecked(this.players[pn]),
+        readyState: this.players[pn].getReadyState(),
       });
     }
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
@@ -203,6 +222,7 @@ const Game = function (name, host) {
         myStatus: this.players[pn].getStatus(),
         myBlind: this.players[pn].getBlind(),
         roundInProgress: this.roundInProgress,
+        myReadyState: this.players[pn].getReadyState(),
         buyIns: this.players[pn].buyIns,
       });
     }
@@ -620,6 +640,7 @@ const Game = function (name, host) {
         username: this.players[i].getUsername(),
         money: this.players[i].getMoney(),
         text: this.players[i].getStatus(),
+        readyState: this.players[i].getReadyState(),
       });
     }
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
@@ -631,6 +652,8 @@ const Game = function (name, host) {
         money: this.players[pn].getMoney(),
         cards: cardData,
         bets: this.roundData.bets,
+        myReadyState: this.players[pn].getReadyState(),
+        roundInProgress: this.roundInProgress,
       });
     }
   };
@@ -648,6 +671,7 @@ const Game = function (name, host) {
         folded: this.players[i].getStatus() == 'Fold',
         money: this.players[i].getMoney(),
         buyIns: this.players[i].buyIns,
+        readyState: this.players[i].getReadyState(),
         gain: winData ? winData.gain : null,
       });
     }
@@ -660,6 +684,8 @@ const Game = function (name, host) {
         bets: this.roundData.bets,
         winners: winnersUsernames,
         hand: this.players[pn].getStatus(),
+        myReadyState: this.players[pn].getReadyState(),
+        roundInProgress: this.roundInProgress,
       });
     }
   };
@@ -743,6 +769,11 @@ const Game = function (name, host) {
   };
 
   this.startGame = () => {
+    // The host chose to start, so treat every funded player as 'ready' for
+    // the first hand (seeds an immediate deal when >= 2 are funded).
+    for (pn of this.players) {
+      pn.setReadyState(pn.getMoney() > 0 ? 'ready' : 'undecided');
+    }
     this.dealCards();
     this.emitPlayers('startGame', {
       players: this.players.map((p) => {
@@ -797,6 +828,31 @@ const Game = function (name, host) {
     return { socket: { id: 0 } };
   };
 
+  this.setReady = (socket, choice) => {
+    const player = this.findPlayer(socket.id);
+    if (!player || typeof player.getMoney !== 'function') {
+      return false;
+    }
+    // Only meaningful between hands.
+    if (this.roundInProgress) {
+      return false;
+    }
+    // Broke players rebuy rather than ready up.
+    if (player.getMoney() === 0) {
+      return false;
+    }
+    if (choice !== 'ready' && choice !== 'watching') {
+      return false;
+    }
+    player.setReadyState(choice);
+    if (this.canStartNextHand()) {
+      this.startNewRound();
+    } else {
+      this.rerender();
+    }
+    return true;
+  };
+
   this.rebuy = (socket) => {
     const player = this.findPlayer(socket.id);
     if (!player || typeof player.getMoney !== 'function') {
@@ -817,6 +873,8 @@ const Game = function (name, host) {
     player.buyIns = (player.buyIns || 0) + 1;
     player.spectating = false;
     player.setStatus('');
+    // A rebuyer sits out by default until they actively opt back in.
+    player.setReadyState('watching');
     this.lastRebuyError = null;
     this.emitPlayers('playerRebuy', {
       player: player.getUsername(),
@@ -875,7 +933,13 @@ const Game = function (name, host) {
       code: this.getCode(),
     });
     this.emitPlayers('hostRoomUpdate', { players: this.getPlayersArray() });
-    this.rerender();
+    // If the departing player was the only one stalling the ready-up phase,
+    // try to start the next hand now so the table doesn't sit idle.
+    if (!this.roundInProgress && this.canStartNextHand()) {
+      this.startNewRound();
+    } else {
+      this.rerender();
+    }
   };
 
   this.checkBigBlindWent = (socket) => {

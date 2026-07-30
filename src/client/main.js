@@ -375,6 +375,8 @@ socket.on('rerender', function (data) {
         bets: data.bets,
         buyIns: p.buyIns,
         isChecked: p.isChecked,
+        readyState: p.readyState,
+        roundInProgress: data.roundInProgress,
       }, styles[i] || styles[0]);
     }).join('')
   );
@@ -387,6 +389,12 @@ socket.on('rerender', function (data) {
   });
   maybeShowRebuyPrompt(data.myMoney, data.roundInProgress);
   if (!data.roundInProgress) hideAllActionBtns();
+  renderReadyPhase({
+    roundInProgress: data.roundInProgress,
+    myMoney: data.myMoney,
+    myReadyState: data.myReadyState,
+    players: data.players,
+  });
 });
 
 socket.on('gameBegin', function (data) {
@@ -406,8 +414,54 @@ socket.on('gameBegin', function (data) {
   $('#gameDiv').css('display', 'flex');
 });
 
-function playNext() {
-  socket.emit('startNextRound', {});
+function chooseReady(choice) {
+  socket.emit('playerReady', { choice: choice });
+}
+
+// Between hands, render the ready-up controls (Ready / Watch) for the local
+// player plus a waiting hint derived from everyone's readyState. This replaces
+// the old single "Start Next Hand" button: the next hand now begins
+// automatically server-side once every funded player has chosen and >= 2 are ready.
+function renderReadyPhase(opts) {
+  var $wrap = $('#playNext');
+  $wrap.empty();
+  if (opts.roundInProgress) return; // mid-hand: action buttons own the bar
+  if (opts.myMoney === 0) return; // broke: the rebuy bar handles this
+
+  var funded = (opts.players || []).filter(function (p) {
+    return p.money > 0;
+  });
+  var ready = funded.filter(function (p) {
+    return p.readyState === 'ready';
+  }).length;
+  var undecided = funded.filter(function (p) {
+    return p.readyState === 'undecided';
+  }).length;
+  var hint;
+  if (ready < 2) hint = '等待至少 2 人准备好（当前 ' + ready + ' 人已准备）…';
+  else if (undecided > 0) hint = '等待 ' + undecided + ' 位玩家选择…';
+  else hint = '即将开始…';
+
+  var html =
+    '<div class="ready-phase"><div class="ready-phase-hint">' + hint + '</div>';
+  if (opts.myReadyState === 'ready') {
+    html +=
+      '<button class="action-btn action-on ready-btn" disabled>✓ 已准备好</button>';
+    html +=
+      '<button onclick="chooseReady(\'watching\')" class="action-btn action-on watch-btn">旁观</button>';
+  } else if (opts.myReadyState === 'watching') {
+    html +=
+      '<button onclick="chooseReady(\'ready\')" class="action-btn action-on ready-btn">准备好</button>';
+    html +=
+      '<button class="action-btn action-on watch-btn" disabled>旁观中</button>';
+  } else {
+    html +=
+      '<button onclick="chooseReady(\'ready\')" class="action-btn action-on ready-btn">准备好</button>';
+    html +=
+      '<button onclick="chooseReady(\'watching\')" class="action-btn action-on watch-btn">旁观</button>';
+  }
+  html += '</div>';
+  $wrap.html(html);
 }
 
 socket.on('reveal', function (data) {
@@ -422,9 +476,6 @@ socket.on('reveal', function (data) {
   }
   $('#table-title').text('Winner: ' + winners.join(', '));
   $('#tableStage').text('');
-  $('#playNext').html(
-    '<button onClick=playNext() id="playNextButton" class="play-next-btn">Start Next Hand</button>'
-  );
   $('#blindStatus').text(data.hand);
   $('#usernamesMoney').text('$' + data.money);
   maybeShowRebuyPrompt(data.money, false);
@@ -440,9 +491,17 @@ socket.on('reveal', function (data) {
         cards: p.cards,
         showCards: !p.folded,
         endHand: p.hand,
+        readyState: p.readyState,
+        roundInProgress: false,
       }, styles[i] || styles[0]);
     }).join('')
   );
+  renderReadyPhase({
+    roundInProgress: false,
+    myMoney: data.money,
+    myReadyState: data.myReadyState,
+    players: data.cards,
+  });
 });
 
 socket.on('endHand', function (data) {
@@ -450,9 +509,6 @@ socket.on('endHand', function (data) {
   $('#table-title').text(data.winner + ' wins $' + data.pot);
   $('#potAmount').text('$' + data.pot);
   $('#tableStage').text('');
-  $('#playNext').html(
-    '<button onClick=playNext() id="playNextButton" class="play-next-btn">Start Next Hand</button>'
-  );
   $('#blindStatus').text('');
   if (data.folded == 'Fold') {
     $('#status').text('Folded');
@@ -471,9 +527,17 @@ socket.on('endHand', function (data) {
         money: p.money,
         blind: '',
         bets: data.bets,
+        readyState: p.readyState,
+        roundInProgress: false,
       }, styles[i] || styles[0]);
     }).join('')
   );
+  renderReadyPhase({
+    roundInProgress: false,
+    myMoney: data.money,
+    myReadyState: data.myReadyState,
+    players: data.cards,
+  });
 });
 
 var beginHost = function () {
@@ -623,6 +687,19 @@ function renderSeat(name, data, style) {
   else if (data.isChecked) statusHtml = '<div class="seat-status">Check</div>';
   else if (data.text === 'Spectating')
     statusHtml = '<div class="seat-status">Spectating</div>';
+  // Between hands, show each funded player's ready-up choice on their seat.
+  if (
+    data.roundInProgress === false &&
+    data.money > 0 &&
+    (data.readyState === 'ready' || data.readyState === 'watching')
+  ) {
+    statusHtml +=
+      '<div class="seat-status seat-' +
+      data.readyState +
+      '">' +
+      (data.readyState === 'ready' ? 'Ready' : 'Watching') +
+      '</div>';
+  }
   var handHtml = data.endHand
     ? '<div class="seat-hand">' + data.endHand + '</div>'
     : '';

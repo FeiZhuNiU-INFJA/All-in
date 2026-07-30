@@ -13,6 +13,9 @@ const Player = function (playerName, socket, debug) {
   this.dealer = false;
   this.allIn = false;
   this.goAgainStatus = false;
+  // Ready-up state between hands: 'undecided' | 'ready' | 'watching'.
+  // 'watching' persists across hands; 'ready' resets to 'undecided' each hand.
+  this.readyState = 'undecided';
   this.debug = debug || false;
 
   this.addCard = (card) => {
@@ -28,6 +31,7 @@ const Player = function (playerName, socket, debug) {
   this.setStatus = (data) => (this.status = data);
   this.setBlind = (data) => (this.blindValue = data);
   this.setDealer = (data) => (this.dealer = data);
+  this.setReadyState = (v) => (this.readyState = v);
   this.getUsername = () => {
     return this.username;
   };
@@ -45,6 +49,9 @@ const Player = function (playerName, socket, debug) {
   };
   this.getDealer = () => {
     return this.dealer;
+  };
+  this.getReadyState = () => {
+    return this.readyState;
   };
 
   this.emit = (eventName, payload) => {
