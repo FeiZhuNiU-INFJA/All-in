@@ -284,6 +284,7 @@ const Game = function (name, host) {
         username: this.players[pn].getUsername(),
         status: this.players[pn].getStatus(),
         blind: this.players[pn].getBlind(),
+        dealer: this.players[pn].getDealer(),
         money: this.players[pn].getMoney(),
         buyIns: this.players[pn].buyIns,
         isChecked: this.playerIsChecked(this.players[pn]),
@@ -500,7 +501,9 @@ const Game = function (name, host) {
           // Delay the reveal until the final deal animation (river card, or the
           // all-in runout cards) finishes — otherwise the winner pops up while
           // the last cards are still flying in. More runout cards = longer wait.
-          const dealMs = this.runoutCards > 0 ? this.runoutCards * 280 + 700 : 350;
+          // Delay must match the CURRENT deal pace (1s/card after the action).
+          // Last runout card lands at ~(runoutCards + 0.5)s, so wait past that.
+          const dealMs = this.runoutCards > 0 ? this.runoutCards * 1000 + 1000 : 350;
           this.runoutCards = 0;
           setTimeout(() => this.revealCards(winners), dealMs);
         } else {
@@ -608,12 +611,13 @@ const Game = function (name, host) {
       for (p of playerInvestments) {
         p.invested -= minStack;
       }
-      const sortedByHandStrength = playerInvestments.sort((a, b) =>
-        a.handStrength > b.handStrength ? -1 : 1
-      );
-      const maxHand = sortedByHandStrength[0].handStrength;
-      const winners = playerInvestments.filter(
-        (p) => p.handStrength === maxHand && p.live
+      const sortedByHandStrength = playerInvestments.filter((p) => p.live);
+      let maxHand = -1;
+      for (let p of sortedByHandStrength) {
+        if (p.handStrength > maxHand) maxHand = p.handStrength;
+      }
+      const winners = sortedByHandStrength.filter(
+        (p) => p.handStrength === maxHand
       );
       for (p of winners) {
         p.result += winnerPot / winners.length;
@@ -859,6 +863,23 @@ const Game = function (name, host) {
 
   this.addPlayer = (playerName, socket) => {
     const player = new Player(playerName, socket, this.debug);
+    this.players.push(player);
+    return player;
+  };
+
+  // Reconnect a player who left: restore their chips & shame coins (buyIns)
+  // from when they disconnected, instead of starting fresh. Returns the player,
+  // or null if no saved session exists for this name (then addPlayer instead).
+  // If everyone leaves the room is reset/deleted, clearing these sessions.
+  this.reconnectPlayer = (playerName, socket) => {
+    const idx = this.disconnectedPlayers.findIndex(
+      (p) => p.getUsername() === playerName
+    );
+    if (idx === -1) return null;
+    const player = this.disconnectedPlayers[idx];
+    this.disconnectedPlayers.splice(idx, 1);
+    player.socket = socket;
+    if (player.getMoney() > 0) player.setReadyState('undecided');
     this.players.push(player);
     return player;
   };
@@ -1273,6 +1294,19 @@ const Game = function (name, host) {
     }
   };
 
+  // All-in: shove all remaining chips. Routes to bet / call / raise on its own
+  // so the client only needs a single "All-In" action.
+  this.allIn = (socket) => {
+    const player = this.findPlayer(socket.id);
+    if (!player || player.getMoney() <= 0) return false;
+    const topBet = this.getCurrentTopBet();
+    const currBet = this.getPlayerBetInStage(player);
+    const total = currBet + player.getMoney();
+    if (topBet === 0) return this.bet(socket, player.getMoney());
+    if (total <= topBet) return this.call(socket);
+    return this.raise(socket, total);
+  };
+
   this.getPossibleMoves = (socket) => {
     const player = this.findPlayer(socket.id);
     const playerBet = this.getPlayerBetInStage(player);
@@ -1283,6 +1317,7 @@ const Game = function (name, host) {
       bet: 'yes',
       call: topBet,
       raise: 'yes',
+      allin: 'yes',
     };
     if (player.getStatus() == 'Fold') {
       this.log('Error: Folded players should not be able to move.');

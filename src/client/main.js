@@ -75,6 +75,13 @@ function hideAllActionBtns() {
   hideActionBtn('#usernameBet');
   hideActionBtn('#usernameCall');
   hideActionBtn('#usernameRaise');
+  hideActionBtn('#usernameAllIn');
+}
+
+function confirmAllIn() {
+  if (window.confirm('确定要 All-In 吗？\n这将投入你的全部筹码。')) {
+    socket.emit('moveMade', { move: 'allin', bet: 'All-in' });
+  }
 }
 
 var socket = io();
@@ -702,6 +709,7 @@ socket.on('rerender', function (data) {
         text: p.status,
         money: p.money,
         blind: p.blind,
+        dealer: p.dealer,
         bets: data.bets,
         buyIns: p.buyIns,
         isChecked: p.isChecked,
@@ -1144,6 +1152,9 @@ function renderSeat(name, data, style) {
   var bet = getPlayerBet(name, data.bets);
   var stateClass = seatStateClass(data.text);
   var nameHtml = name + shameCoinsHtml(data.buyIns);
+  var dealerBadge = data.dealer
+    ? '<span class="seat-dealer" title="庄家">D</span>'
+    : '';
   var blindBadge = data.blind
     ? '<span class="seat-blind">' + abbrevBlind(data.blind) + '</span>'
     : '';
@@ -1189,6 +1200,7 @@ function renderSeat(name, data, style) {
     ';left:' +
     style.left +
     '">' +
+    dealerBadge +
     blindBadge +
     '<div class="seat-name">' +
     nameHtml +
@@ -1304,6 +1316,8 @@ socket.on('displayPossibleMoves', function (data) {
   } else hideActionBtn('#usernameCall');
   if (data.raise == 'yes') showActionBtn('#usernameRaise');
   else hideActionBtn('#usernameRaise');
+  if (data.allin == 'yes') showActionBtn('#usernameAllIn');
+  else hideActionBtn('#usernameAllIn');
 });
 
 function renderSelf(data) {

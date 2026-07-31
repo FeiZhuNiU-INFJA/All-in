@@ -79,7 +79,9 @@ io.on('connection', (socket) => {
       return;
     }
     const game = rooms.find((r) => r.getCode() === data.code);
-    game.addPlayer(data.username, socket);
+    if (!game.reconnectPlayer(data.username, socket)) {
+      game.addPlayer(data.username, socket);
+    }
     rooms = rooms.map((r) => (r.getCode() === data.code ? game : r));
     game.emitPlayers('joinRoom', {
       host: game.getHostName(),
@@ -167,6 +169,7 @@ io.on('connection', (socket) => {
     else if (data.move == 'bet') ok = game.bet(socket, data.bet);
     else if (data.move == 'call') ok = game.call(socket);
     else if (data.move == 'raise') ok = game.raise(socket, data.bet);
+    else if (data.move == 'allin') ok = game.allIn(socket);
     // Broadcast the resolved action so every client can play its sound.
     if (ok) game.recordAction(data.move, socket, data.bet);
   });

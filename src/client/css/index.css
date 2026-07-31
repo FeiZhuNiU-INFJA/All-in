@@ -12,7 +12,7 @@ body {
   padding: 0;
   height: 100%;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: radial-gradient(ellipse at 50% 0%, #1a3d2a 0%, #0a1f14 55%, #050f0a 100%);
+  background: radial-gradient(ellipse 75% 60% at 50% 40%, #103625 0%, #082014 40%, #03100a 100%);
   color: #e8e8e8;
   overflow-x: hidden;
 }
@@ -48,8 +48,9 @@ code {
 }
 
 .lobby-title {
+  font-family: Georgia, "Times New Roman", serif;
   font-weight: 700;
-  font-size: 2rem;
+  font-size: 2.1rem;
   margin: 0 0 8px;
   color: #f6e27a;
   letter-spacing: 1px;
@@ -320,22 +321,46 @@ body.modal-open {
   position: absolute;
   inset: -14px;
   border-radius: 50%;
-  background: linear-gradient(145deg, #8b5a2b 0%, #5c3317 40%, #3d1f0a 100%);
+  background: radial-gradient(
+    ellipse at 50% 16%,
+    #6a4226 0%,
+    #43260f 38%,
+    #28140a 76%,
+    #1a0c05 100%
+  );
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.6),
-    inset 0 2px 4px rgba(255, 200, 100, 0.2),
-    inset 0 -4px 8px rgba(0, 0, 0, 0.4);
+    0 18px 50px rgba(0, 0, 0, 0.7),
+    0 6px 18px rgba(0, 0, 0, 0.55),
+    inset 0 3px 6px rgba(255, 200, 120, 0.28),
+    inset 0 -7px 16px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 2px rgba(201, 162, 39, 0.32);
+}
+
+/* Stitched leather seam running just inside the rail, with a brass inner ring. */
+.table-rail::after {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  border: 2px dashed rgba(201, 162, 39, 0.38);
+  pointer-events: none;
 }
 
 .table-felt {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background:
-    radial-gradient(ellipse at 50% 40%, #2d8a4e 0%, #1a6b38 50%, #0f4d28 100%);
+  background: radial-gradient(
+    ellipse 82% 76% at 50% 38%,
+    #2f8050 0%,
+    #1f6644 30%,
+    #134d30 60%,
+    #0c3324 100%
+  );
   box-shadow:
-    inset 0 0 60px rgba(0, 0, 0, 0.35),
-    inset 0 4px 12px rgba(255, 255, 255, 0.06);
+    inset 0 0 90px rgba(0, 0, 0, 0.5),
+    inset 0 7px 20px rgba(255, 240, 200, 0.08),
+    inset 0 -12px 28px rgba(0, 0, 0, 0.45);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -343,25 +368,45 @@ body.modal-open {
   gap: 8px;
 }
 
-/* subtle felt texture */
+/* Felt grain: fractal-noise texture blended into the cloth. */
 .table-felt::before {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%231a6b38'/%3E%3Crect width='1' height='1' fill='%232d8a4e'/%3E%3C/svg%3E");
-  opacity: 0.3;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.22;
+  mix-blend-mode: overlay;
   pointer-events: none;
+  z-index: 0;
+}
+
+/* Warm light pool — a tungsten lamp hanging over the center of the felt. */
+.table-felt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse 46% 42% at 50% 32%,
+    rgba(255, 236, 180, 0.16) 0%,
+    rgba(255, 236, 180, 0) 70%
+  );
+  pointer-events: none;
+  z-index: 1;
 }
 
 .pot-area {
   position: relative;
   z-index: 2;
   text-align: center;
-  background: rgba(0, 0, 0, 0.35);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0.55));
   border-radius: 20px;
   padding: 4px 18px 6px;
-  border: 1px solid rgba(246, 226, 122, 0.25);
+  border: 1px solid rgba(201, 162, 39, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(246, 226, 122, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .pot-label {
@@ -373,9 +418,11 @@ body.modal-open {
 }
 
 .pot-amount {
+  font-family: Georgia, "Times New Roman", serif;
   font-weight: 700;
   font-size: 1.3rem;
   color: #fff;
+  letter-spacing: 0.5px;
 }
 
 .community-cards {
@@ -457,6 +504,17 @@ body.modal-open {
   border-radius: 4px;
   padding: 1px 5px;
   letter-spacing: 0.5px;
+}
+
+/* Dealer button (white "D" disc). */
+.seat-dealer {
+  font-size: 0.58rem;
+  background: #fff;
+  color: #111;
+  border-radius: 50%;
+  padding: 1px 5px;
+  font-weight: 800;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 .seat-status {
@@ -737,9 +795,12 @@ body.modal-open {
   font-weight: 600;
   cursor: pointer;
   letter-spacing: 0.3px;
-  transition: transform 0.1s, opacity 0.1s;
+  transition: transform 0.1s, opacity 0.1s, box-shadow 0.1s;
   min-width: 68px;
   height: 42px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 2px 5px rgba(0, 0, 0, 0.4);
 }
 
 .action-btn.action-on {
@@ -755,27 +816,32 @@ body.modal-open {
 }
 
 .action-fold {
-  background: #555;
+  background: linear-gradient(180deg, #6b6b6b, #454545);
   color: #fff;
 }
 
 .action-check {
-  background: #2980b9;
+  background: linear-gradient(180deg, #3498db, #2471a3);
   color: #fff;
 }
 
 .action-bet {
-  background: #8e44ad;
+  background: linear-gradient(180deg, #a569bd, #7d3c98);
   color: #fff;
 }
 
 .action-call {
-  background: #27ae60;
+  background: linear-gradient(180deg, #2ecc71, #1e8449);
   color: #fff;
 }
 
 .action-raise {
-  background: #e67e22;
+  background: linear-gradient(180deg, #f39c12, #ca6f1e);
+  color: #fff;
+}
+
+.action-allin {
+  background: linear-gradient(180deg, #e74c3c, #a93226);
   color: #fff;
 }
 
@@ -817,24 +883,26 @@ body.modal-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid #222;
-  background: linear-gradient(160deg, #fff 60%, #f0f0f0);
-  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  background: linear-gradient(160deg, #fbf6e8 0%, #f1e8d2 68%, #e6dabb 100%);
+  border-radius: 7px;
   height: 100px;
   width: 68px;
   padding: 4px;
   font-size: 1.3rem;
   font-weight: 700;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.45);
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
   flex-shrink: 0;
 }
 
 .playingCard_black {
-  color: #111;
+  color: #1a1a1a;
 }
 
 .playingCard_red {
-  color: #c0392b;
+  color: #b02418;
 }
 
 .playingCard_black_opponent,
@@ -842,40 +910,41 @@ body.modal-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid #222;
-  background: linear-gradient(160deg, #fff 60%, #f0f0f0);
-  border-radius: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  background: linear-gradient(160deg, #fbf6e8 0%, #f1e8d2 68%, #e6dabb 100%);
+  border-radius: 6px;
   height: 62px;
   width: 44px;
   padding: 2px;
   font-size: 0.85rem;
   font-weight: 700;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
   flex-shrink: 0;
 }
 
 .playingCard_black_opponent {
-  color: #111;
+  color: #1a1a1a;
 }
 
 .playingCard_red_opponent {
-  color: #c0392b;
+  color: #b02418;
 }
 
 .blankCard {
   display: inline-block;
-  background: repeating-linear-gradient(
-    45deg,
-    #1a3a6b,
-    #1a3a6b 6px,
-    #0f2550 6px,
-    #0f2550 12px
-  );
-  border: 2px solid #333;
-  border-radius: 5px;
+  background:
+    repeating-linear-gradient(45deg, rgba(246, 226, 122, 0.14) 0 6px, transparent 6px 12px),
+    repeating-linear-gradient(-45deg, rgba(246, 226, 122, 0.14) 0 6px, transparent 6px 12px),
+    radial-gradient(circle at 50% 50%, #5a1a1a 0%, #3a0f0f 100%);
+  border: 2px solid rgba(201, 162, 39, 0.5);
+  border-radius: 6px;
   height: 62px;
   width: 44px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.4),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.3);
   flex-shrink: 0;
 }
 

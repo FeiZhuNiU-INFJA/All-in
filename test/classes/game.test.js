@@ -1272,3 +1272,132 @@ test('a watching (rebuying) player never blocks the ready-up gate', () => {
   game.players[2].setReadyState('ready');
   expect(game.canStartNextHand()).toBe(true);
 });
+
+test('allIn shoves all remaining chips', () => {
+  const game = new Game('allin-game', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  game.startGame();
+  // Preflop, first to act shoves (raise-all-in over the big blind).
+  const cur = getCurrentPlayer(game.players);
+  const before = cur.getMoney();
+  expect(before).toBeGreaterThan(0);
+  expect(game.allIn(cur.socket)).toBe(true);
+  expect(cur.getMoney()).toBe(0);
+  expect(cur.allIn).toBe(true);
+  expect(game.getCurrentTopBet()).toBeGreaterThanOrEqual(before);
+});
+
+test('min-raise compounds across multiple raises (3 players)', () => {
+  const game = new Game('minraise-3', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  addMockPlayer(game, 3);
+  game.startGame();
+  // Preflop: SB first. Min raise is to 2*BB = 20 (the big blind is the opener).
+  let cur = getCurrentPlayer(game.players);
+  expect(game.raise(cur.socket, 15)).not.toBe(true); // below min raise
+  expect(game.raise(cur.socket, 20)).toBe(true); // min raise (+BB)
+  // lastRaiseSize is now 10; next raise must add >= 10 on top of 20 -> >= 30
+  cur = getCurrentPlayer(game.players);
+  expect(game.raise(cur.socket, 25)).not.toBe(true); // only +5
+  expect(game.raise(cur.socket, 30)).toBe(true); // +10
+});
+
+test('dealer button skips spectators when rotating', () => {
+  const game = new Game('dealer-skip', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  addMockPlayer(game, 3);
+  game.startGame();
+  // Ready-up for hand 2: players 1 & 3 ready, player 2 watches (sits out).
+  game.players[0].setReadyState('ready');
+  game.players[1].setReadyState('watching');
+  game.players[2].setReadyState('ready');
+  game.startNewRound();
+  // The dealer must not land on the watching (spectating) player.
+  expect(game.players[game.roundData.dealer].spectating).toBe(false);
+  expect(game.players[game.roundData.dealer].getReadyState()).not.toBe('watching');
+});
+
+test('reconnecting player keeps their chips and shame coins', () => {
+  const game = new Game('reconnect-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  p1.money = 500;
+  p1.buyIns = 3;
+  game.disconnectPlayer(p1);
+  expect(game.players.length).toBe(1);
+  // Reconnect the same name with a fresh socket.
+  const s1b = new events.EventEmitter();
+  s1b.id = 99;
+  const rc = game.reconnectPlayer('1', s1b);
+  expect(rc).toBeTruthy();
+  expect(rc.getMoney()).toBe(500);
+  expect(rc.buyIns).toBe(3);
+  expect(game.players.length).toBe(2);
+});
+
+test('reconnect returns null when there is no saved session', () => {
+  const game = new Game('noreconnect-game', '1');
+  addMockPlayer(game, 1);
+  const s = new events.EventEmitter();
+  s.id = 7;
+  expect(game.reconnectPlayer('ghost', s)).toBe(null);
+});
+
+// ── Rule coverage (WSOP / TDA) ──────────────────────────────────────────
+
+test('calculateMoney splits the pot evenly on a tie', () => {
+  // Two players, identical hand strength -> chop the pot (TDA: ties split evenly).
+  const game = new Game('split-unit', '1');
+  const players = [
+    { live: true, invested: 50, handStrength: 100, result: 0 },
+    { live: true, invested: 50, handStrength: 100, result: 0 },
+  ];
+  game.calculateMoney(0, players);
+  expect(players[0].result).toBe(50);
+  expect(players[1].result).toBe(50);
+});
+
+test('all-in below the minimum raise is allowed but does not lower the min raise', () => {
+  // TDA "less than a full raise does not reopen betting": a short all-in is
+  // permitted, but it must NOT reduce lastRaiseSize (which would let others
+  // re-raise for less than the previous full raise).
+  const game = new Game('shortraise', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  game.startGame();
+  // Preflop: first to act raises to 60 (raise of 50 over the BB=10).
+  let cur = getCurrentPlayer(game.players);
+  expect(game.raise(cur.socket, 60)).toBe(true);
+  expect(game.lastRaiseSize).toBe(50);
+  // The big blind shoves for less than a full re-raise (min would be 60+50=110).
+  cur = getCurrentPlayer(game.players); // big blind
+  cur.money = 90; // already put in 10 -> all-in to 100
+  expect(game.raise(cur.socket, 100)).toBe(true); // allowed (all-in)
+  expect(cur.money).toBe(0);
+  expect(cur.allIn).toBe(true);
+  // lastRaiseSize must stay at 50 (not drop to 40).
+  expect(game.lastRaiseSize).toBe(50);
+});
+
+test('a folded player is excluded from the showdown and loses their wager', () => {
+  // Folded (non-live) players never win any part of the pot.
+  const game = new Game('folded-unit', '1');
+  const players = [
+    { live: false, invested: 50, handStrength: 999, result: 0 }, // folded, strong
+    { live: true, invested: 50, handStrength: 100, result: 0 }, // live, weaker
+  ];
+  game.calculateMoney(0, players);
+  expect(players[0].result).toBe(0); // folded gets nothing despite "stronger"
+  expect(players[1].result).toBe(100); // live player sweeps the pot
+});
