@@ -747,14 +747,14 @@ function renderHeroSeat(name, data, style) {
     cardsHtml = '<div class="blankCard"></div><div class="blankCard"></div>';
   }
   var betHtml = '';
-  if (bet > 0) {
+  if (data.roundInProgress !== false && bet > 0) {
     betHtml =
       '<div id="heroBet" class="seat-bet">' +
       chipLottieHtml() +
       '$' +
       bet +
       '</div>';
-  } else if (data.text === 'Their Turn') {
+  } else if (data.roundInProgress !== false && data.text === 'Their Turn') {
     betHtml =
       '<div id="heroBet" class="seat-bet seat-thinking-chip" aria-hidden="true">' +
       chipLottieHtml() +
@@ -1058,13 +1058,120 @@ socket.on('dealt', function (data) {
 // A player action resolved (fold/check/bet/call/raise). Played via a dedicated
 // event — not rerender — so it fires even on all-fold/showdown, and so a deal
 // sound that follows (next street) can be staggered AFTER it.
+// While a street is holding before collect-to-pot, keep these seat amounts
+// painted even if a rerender rebuilds the ring.
+var streetHoldBets = null;
+
+function applyStreetHoldBets() {
+  if (!streetHoldBets) return;
+  Object.keys(streetHoldBets).forEach(function (name) {
+    if (streetHoldBets[name] > 0) paintSeatStreetBet(name, streetHoldBets[name]);
+  });
+}
+
 socket.on('actionSound', function (data) {
   if (data && data.seq > lastActionSeq) {
     playActionSound(data.move);
     showActionPopup(data.player, data.move, data.amount);
+    // Immediately put this street's chips on the seat (call/all-in/bet/raise)
+    // so the hold-before-collect is actually visible.
+    if (
+      data.streetBet > 0 &&
+      (data.move === 'bet' ||
+        data.move === 'call' ||
+        data.move === 'raise' ||
+        data.move === 'allin')
+    ) {
+      paintSeatStreetBet(data.player, data.streetBet);
+    }
     lastActionSeq = data.seq;
   }
 });
+
+// Street just closed: force every seat bet visible, then server waits holdMs.
+socket.on('holdStreetBets', function (data) {
+  streetHoldBets = (data && data.bets) || {};
+  applyStreetHoldBets();
+});
+
+// Betting round closed: gather every seat's chips into the pot, then clear
+// the seat bet labels. Server waits for this animation before dealing / reveal.
+socket.on('collectBets', function (data) {
+  playCoinsSound();
+  var pot = data && typeof data.pot === 'number' ? data.pot : null;
+  var bets = (data && data.bets) || streetHoldBets || {};
+  streetHoldBets = null;
+  // Prefer explicit seat list from the hold snapshot.
+  var names = Object.keys(bets);
+  if (names.length) {
+    names.forEach(function (name) {
+      var $seat = getWinnerEl(name, myUsername);
+      if ($seat && $seat.length) flyChipsToPot($seat);
+    });
+  } else {
+    var $seats = $('#opponentCards .table-seat').add('#playerInformationCard');
+    $seats.each(function () {
+      var $seat = $(this);
+      var $bet = $seat.find('.seat-bet').filter(function () {
+        return !$(this).hasClass('seat-thinking-chip') && !$(this).is('[hidden]');
+      });
+      if (!$bet.length) return;
+      var text = ($bet.text() || '').replace(/[^0-9]/g, '');
+      if (!text || text === '0') return;
+      flyChipsToPot($seat);
+    });
+  }
+  // After chips land in the pot, clear seat amounts and show the new pot.
+  setTimeout(function () {
+    clearAllSeatStreetBets();
+    if (pot != null) $('#potAmount').text('$' + pot);
+  }, 750);
+});
+
+function paintSeatStreetBet(name, amount) {
+  var $seat = getWinnerEl(name, myUsername);
+  if (!$seat || !$seat.length || !(amount > 0)) return;
+  var label = chipLottieHtml() + '$' + amount;
+  var $bet = $seat.find('.seat-bet').first();
+  if ($seat.hasClass('seat-hero') || $seat.attr('id') === 'playerInformationCard') {
+    var $heroBet = $('#heroBet');
+    if (!$heroBet.length) {
+      $seat.find('.seat-meta').prepend(
+        '<div id="heroBet" class="seat-bet seat-bet-hold">' + label + '</div>'
+      );
+    } else {
+      $heroBet
+        .removeAttr('hidden')
+        .removeClass('seat-thinking-chip')
+        .addClass('seat-bet-hold')
+        .html(label);
+    }
+    return;
+  }
+  if ($bet.length && !$bet.hasClass('seat-thinking-chip')) {
+    $bet.addClass('seat-bet-hold').html(label);
+  } else {
+    $seat.find('.seat-thinking-chip').remove();
+    $seat.find('.seat-stack').after(
+      '<div class="seat-bet seat-bet-hold">' + label + '</div>'
+    );
+  }
+}
+
+function clearAllSeatStreetBets() {
+  $('#opponentCards .table-seat .seat-bet').each(function () {
+    var $b = $(this);
+    if ($b.hasClass('seat-thinking-chip')) return;
+    $b.remove();
+  });
+  var $heroBet = $('#heroBet');
+  if ($heroBet.length) {
+    $heroBet
+      .removeClass('seat-bet-hold seat-thinking-chip')
+      .attr('hidden', true)
+      .empty();
+  }
+}
 
 socket.on('rerender', function (data) {
   myUsername = data.username;
@@ -1146,6 +1253,9 @@ socket.on('rerender', function (data) {
     bets: data.bets,
     buyIns: data.buyIns,
   });
+  // Street-hold snapshot wins over a fresh ring paint (e.g. empty next-street
+  // shell must not wipe the closing call/all-in amounts during the 1.5s pause).
+  applyStreetHoldBets();
   maybeShowRebuyPrompt(data.myMoney, data.roundInProgress);
   if (!data.roundInProgress) hideAllActionBtns();
   renderReadyPhase({
@@ -1464,13 +1574,11 @@ function showActionPopup(playerName, move, amount) {
   setTimeout(function () {
     $popup.remove();
   }, 1800);
-  // Bet/call/raise also fling chips from the seat into the pot.
-  if (move === 'bet' || move === 'call' || move === 'raise') {
-    flyChipsToPot($seat);
-  }
+  // Chips stay at the seat until the street's collectBets animation —
+  // don't fly them into the pot on every bet/call/raise.
 }
 
-// Chips flying from a player's seat into the pot (bet/call/raise).
+// Chips flying from a player's seat into the pot (street collection).
 function flyChipsToPot($fromSeat) {
   var $pot = $('.pot-area');
   if (!$pot.length || !$fromSeat || !$fromSeat.length) return;
@@ -1589,9 +1697,9 @@ function renderSeat(name, data, style) {
     cardsHtml = '<div class="blankCard"></div><div class="blankCard"></div>';
   }
   var betHtml =
-    bet > 0
+    !betweenHands && bet > 0
       ? '<div class="seat-bet">' + chipLottieHtml() + '$' + bet + '</div>'
-      : data.text === 'Their Turn'
+      : !betweenHands && data.text === 'Their Turn'
         ? '<div class="seat-bet seat-thinking-chip" aria-hidden="true">' +
           chipLottieHtml() +
           '</div>'

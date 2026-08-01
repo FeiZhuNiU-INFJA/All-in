@@ -35,6 +35,16 @@ const Game = function (name, host) {
   this.runoutCards = 0;
   this.turnTimer = null;
   this.readyTimer = null;
+  this.streetAdvanceTimer = null;
+  this.pendingStreetAdvance = false;
+  // >0 = give clients time to see seat bets, then collect-to-pot.
+  // Tests set these to 0 for synchronous street advances.
+  this.streetShowMs = 1500;
+  this.streetCollectMs = 900;
+  if (process.env.JEST_WORKER_ID != null) {
+    this.streetShowMs = 0;
+    this.streetCollectMs = 0;
+  }
   this.debug = false;
   this.smallBlind = 1;
   this.bigBlind = 2;
@@ -111,12 +121,15 @@ const Game = function (name, host) {
   // piggybacking the sound on rerender would drop the final action's sound.
   this.recordAction = (move, socket, amount) => {
     const player = this.findPlayer(socket.id);
+    const streetBet = player ? this.getPlayerBetInStage(player) : 0;
     this.actionSeq++;
     this.emitPlayers('actionSound', {
       move: move,
       player: player ? player.getUsername() : '',
       seq: this.actionSeq,
-      amount: typeof amount === 'number' ? amount : null,
+      amount: typeof amount === 'number' ? amount : streetBet || null,
+      // Total chips this player has in the current betting round (for seat UI).
+      streetBet: streetBet,
     });
   };
 
@@ -136,17 +149,13 @@ const Game = function (name, host) {
 
   this.autoAct = (player) => {
     if (!this.roundInProgress || player.getStatus() !== 'Their Turn') return;
+    if (this.streetAdvanceTimer || this.pendingStreetAdvance) return;
     const moves = this.getPossibleMoves(player.socket);
     const move = moves.check === 'yes' ? 'check' : 'fold';
     if (move === 'check') this.check(player.socket);
     else this.fold(player.socket);
-    // Play the action sound just like a manual move.
-    this.actionSeq++;
-    this.emitPlayers('actionSound', {
-      move: move,
-      player: player.getUsername(),
-      seq: this.actionSeq,
-    });
+    this.recordAction(move, player.socket, null);
+    if (this.pendingStreetAdvance) this.scheduleStreetAdvance();
   };
 
   // Ready-up phase timeout: if the ready-up drags on (someone AFK), auto-set
@@ -447,12 +456,132 @@ const Game = function (name, host) {
     this.lastRaiseSize = this.bigBlind;
   };
 
+  // Pause briefly after a betting round closes so clients can: (1) show the
+  // last call/all-in at each seat, (2) animate chips into the pot, (3) then
+  // clear seat bets and deal the next street / reveal.
+  this.clearTheirTurn = () => {
+    for (const p of this.players) {
+      if (p.getStatus() === 'Their Turn') p.setStatus('');
+    }
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
+  };
+
+  this.scheduleStreetAdvance = () => {
+    if (this.streetAdvanceTimer) {
+      clearTimeout(this.streetAdvanceTimer);
+      this.streetAdvanceTimer = null;
+    }
+    this.pendingStreetAdvance = false;
+    this.clearTheirTurn();
+
+    // Snapshot who has chips in for this street — clients paint these on seats
+    // and hold for streetShowMs before collect animation.
+    const streetBets = {};
+    for (const p of this.players) {
+      const amt = this.getPlayerBetInStage(p);
+      if (amt > 0) streetBets[p.getUsername()] = amt;
+    }
+    this.rerender();
+    this.emitPlayers('holdStreetBets', {
+      bets: streetBets,
+      pot: this.getCurrentPot(),
+      holdMs: this.streetShowMs,
+    });
+
+    const runCollect = () => {
+      this.emitPlayers('collectBets', {
+        pot: this.getCurrentPot(),
+        bets: streetBets,
+      });
+      const finish = () => {
+        this.streetAdvanceTimer = null;
+        this.advanceStreet();
+      };
+      if (this.streetCollectMs <= 0) finish();
+      else this.streetAdvanceTimer = setTimeout(finish, this.streetCollectMs);
+    };
+
+    if (this.streetShowMs <= 0) runCollect();
+    else this.streetAdvanceTimer = setTimeout(runCollect, this.streetShowMs);
+  };
+
+  this.finishShowdown = () => {
+    const roundResults = this.evaluateWinners();
+    for (playerResult of roundResults.playersData) {
+      playerResult.player.setStatus(playerResult.hand.name);
+    }
+    const winningData = this.distributeMoney(roundResults);
+    this.roundInProgress = false;
+    const winners = winningData.filter((a) => a.winner);
+    const dealMs =
+      this.runoutCards > 0 ? this.runoutCards * 1000 + 1000 : 350;
+    this.runoutCards = 0;
+    setTimeout(() => this.revealCards(winners), dealMs);
+  };
+
+  this.advanceStreet = () => {
+    const [numNonFolds, nonFolderPlayer] = this.getNonFoldedPlayer();
+    if (numNonFolds == 1) {
+      this.log('everyone folded except one');
+      nonFolderPlayer.money = this.getCurrentPot() + nonFolderPlayer.money;
+      this.endHandAllFold(nonFolderPlayer.getUsername());
+      return;
+    }
+
+    if (this.allPlayersAllIn()) {
+      this.log(' all players all in');
+      this.runoutCards = 0;
+      if (this.roundData.bets.length == 1) {
+        this.community.push(this.deck.dealRandomCard());
+        this.community.push(this.deck.dealRandomCard());
+        this.community.push(this.deck.dealRandomCard());
+        this.roundData.bets.push([]);
+        this.runoutCards += 3;
+      }
+      if (this.roundData.bets.length == 2) {
+        this.community.push(this.deck.dealRandomCard());
+        this.roundData.bets.push([]);
+        this.runoutCards += 1;
+      }
+      if (this.roundData.bets.length == 3) {
+        this.community.push(this.deck.dealRandomCard());
+        this.roundData.bets.push([]);
+        this.runoutCards += 1;
+      }
+      // Runout dealt into empty stage shells — go straight to showdown.
+      this.rerender();
+      this.finishShowdown();
+      return;
+    }
+
+    if (this.roundData.bets.length == 1) {
+      this.community.push(this.deck.dealRandomCard());
+      this.community.push(this.deck.dealRandomCard());
+      this.community.push(this.deck.dealRandomCard());
+      this.updateStage();
+      this.rerender();
+    } else if (this.roundData.bets.length == 2) {
+      this.community.push(this.deck.dealRandomCard());
+      this.updateStage();
+      this.rerender();
+    } else if (this.roundData.bets.length == 3) {
+      this.community.push(this.deck.dealRandomCard());
+      this.updateStage();
+      this.rerender();
+    } else if (this.roundData.bets.length == 4) {
+      this.finishShowdown();
+    } else {
+      this.log('This stage of the round is INVALID!!');
+    }
+  };
+
   this.moveOntoNextPlayer = () => {
     let handOver = false;
     if (this.isStageComplete()) {
       this.log('stage complete');
-      // If only one player remains (e.g. someone timed out and auto-folded),
-      // end the hand immediately — do NOT run out community cards / deal.
       const [numNonFolds, nonFolderPlayer] = this.getNonFoldedPlayer();
       if (numNonFolds == 1) {
         this.log('everyone folded except one');
@@ -460,60 +589,13 @@ const Game = function (name, host) {
         this.endHandAllFold(nonFolderPlayer.getUsername());
         handOver = true;
       } else {
-        if (this.allPlayersAllIn()) {
-          this.log(' all players all in');
-          this.runoutCards = 0;
-          if (this.roundData.bets.length == 1) {
-            this.community.push(this.deck.dealRandomCard());
-            this.community.push(this.deck.dealRandomCard());
-            this.community.push(this.deck.dealRandomCard());
-            this.roundData.bets.push([]);
-            this.runoutCards += 3;
-          }
-          if (this.roundData.bets.length == 2) {
-            this.community.push(this.deck.dealRandomCard());
-            this.roundData.bets.push([]);
-            this.runoutCards += 1;
-          }
-          if (this.roundData.bets.length == 3) {
-            this.community.push(this.deck.dealRandomCard());
-            this.roundData.bets.push([]);
-            this.runoutCards += 1;
-          }
-          this.rerender();
-        }
-        // stage-by-stage logic.
-        if (this.roundData.bets.length == 1) {
-          this.community.push(this.deck.dealRandomCard());
-          this.community.push(this.deck.dealRandomCard());
-          this.community.push(this.deck.dealRandomCard());
-          this.updateStage();
-        } else if (this.roundData.bets.length == 2) {
-          this.community.push(this.deck.dealRandomCard());
-          this.updateStage();
-        } else if (this.roundData.bets.length == 3) {
-          this.community.push(this.deck.dealRandomCard());
-          this.updateStage();
-        } else if (this.roundData.bets.length == 4) {
-          handOver = true;
-          const roundResults = this.evaluateWinners();
-          for (playerResult of roundResults.playersData) {
-            playerResult.player.setStatus(playerResult.hand.name);
-          }
-          const winningData = this.distributeMoney(roundResults);
-          this.roundInProgress = false; // hand is over now; only the reveal broadcast is delayed
-          const winners = winningData.filter((a) => a.winner);
-          // Delay the reveal until the final deal animation (river card, or the
-          // all-in runout cards) finishes — otherwise the winner pops up while
-          // the last cards are still flying in. More runout cards = longer wait.
-          // Delay must match the CURRENT deal pace (1s/card after the action).
-          // Last runout card lands at ~(runoutCards + 0.5)s, so wait past that.
-          const dealMs = this.runoutCards > 0 ? this.runoutCards * 1000 + 1000 : 350;
-          this.runoutCards = 0;
-          setTimeout(() => this.revealCards(winners), dealMs);
-        } else {
-          this.log('This stage of the round is INVALID!!');
-        }
+        // Defer street deal / showdown so the closing bet is visible first.
+        // Live play: app.js calls scheduleStreetAdvance AFTER recordAction.
+        // Tests (streetShowMs === 0): schedule immediately for sync advances.
+        this.pendingStreetAdvance = true;
+        this.clearTheirTurn();
+        handOver = true; // skip the immediate rerender below
+        if (this.streetShowMs <= 0) this.scheduleStreetAdvance();
       }
     } else {
       this.log('stage not complete');
@@ -1175,6 +1257,7 @@ const Game = function (name, host) {
         this.endHandAllFold(nonFolderPlayer.getUsername());
       } else if (wasTheirTurn) {
         this.moveOntoNextPlayer();
+        if (this.pendingStreetAdvance) this.scheduleStreetAdvance();
       }
     }
 
@@ -1215,6 +1298,7 @@ const Game = function (name, host) {
   };
 
   this.fold = (socket) => {
+    if (this.streetAdvanceTimer) return false;
     this.checkBigBlindWent(socket);
     const player = this.findPlayer(socket.id);
     let preFoldBetAmount = 0;
@@ -1249,6 +1333,7 @@ const Game = function (name, host) {
   };
 
   this.call = (socket) => {
+    if (this.streetAdvanceTimer) return false;
     this.checkBigBlindWent(socket);
     const player = this.findPlayer(socket.id);
     let currBet = this.getPlayerBetInStage(player);
@@ -1260,7 +1345,7 @@ const Game = function (name, host) {
         if (player.getMoney() - topBet <= 0) {
           this.setCurrentRoundBets(
             this.getCurrentRoundBets().map((a) =>
-              a.player == player.username
+              a.player == player.getUsername()
                 ? { player: player.getUsername(), bet: player.getMoney() }
                 : a
             )
@@ -1270,7 +1355,7 @@ const Game = function (name, host) {
         } else {
           this.setCurrentRoundBets(
             this.getCurrentRoundBets().map((a) =>
-              a.player == player.username
+              a.player == player.getUsername()
                 ? { player: player.getUsername(), bet: topBet }
                 : a
             )
@@ -1302,7 +1387,7 @@ const Game = function (name, host) {
         if (player.getMoney() + currBet - topBet <= 0) {
           this.setCurrentRoundBets(
             this.getCurrentRoundBets().map((a) =>
-              a.player == player.username
+              a.player == player.getUsername()
                 ? {
                     player: player.getUsername(),
                     bet: player.getMoney() + currBet,
@@ -1316,7 +1401,7 @@ const Game = function (name, host) {
         } else {
           this.setCurrentRoundBets(
             this.getCurrentRoundBets().map((a) =>
-              a.player == player.username
+              a.player == player.getUsername()
                 ? { player: player.getUsername(), bet: topBet }
                 : a
             )
@@ -1332,6 +1417,7 @@ const Game = function (name, host) {
   };
 
   this.bet = (socket, bet) => {
+    if (this.streetAdvanceTimer) return false;
     this.checkBigBlindWent(socket);
     if (bet >= this.bigBlind) {
       const player = this.findPlayer(socket.id);
@@ -1355,6 +1441,7 @@ const Game = function (name, host) {
   };
 
   this.check = (socket) => {
+    if (this.streetAdvanceTimer) return false;
     this.checkBigBlindWent(socket);
     let currBet = 0;
     const player = this.findPlayer(socket.id);
@@ -1384,6 +1471,7 @@ const Game = function (name, host) {
   };
 
   this.raise = (socket, bet) => {
+    if (this.streetAdvanceTimer) return false;
     this.checkBigBlindWent(socket);
     const topBet = this.getCurrentTopBet();
     const player = this.findPlayer(socket.id);
@@ -1429,6 +1517,7 @@ const Game = function (name, host) {
   // All-in: shove all remaining chips. Routes to bet / call / raise on its own
   // so the client only needs a single "All-In" action.
   this.allIn = (socket) => {
+    if (this.streetAdvanceTimer) return false;
     const player = this.findPlayer(socket.id);
     if (!player || player.getMoney() <= 0) return false;
     const topBet = this.getCurrentTopBet();

@@ -1054,6 +1054,22 @@ body.modal-open {
   min-width: 0;
 }
 
+/* Emphasize seat chips while holding before collect-to-pot. */
+.seat-bet.seat-bet-hold {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #ffe9a8;
+  text-shadow:
+    0 0 10px rgba(212, 181, 106, 0.85),
+    0 1px 3px rgba(0, 0, 0, 0.85);
+  animation: seat-bet-hold-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes seat-bet-hold-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.92; }
+}
+
 /* Thinking: same chip motion as a posted bet/blind, no amount. */
 .seat-thinking-chip {
   min-width: 18px;
