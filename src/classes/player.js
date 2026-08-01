@@ -55,7 +55,13 @@ const Player = function (playerName, socket, debug) {
   };
 
   this.emit = (eventName, payload) => {
-    this.socket.emit(eventName, payload);
+    try {
+      if (this.socket && typeof this.socket.emit === 'function') {
+        this.socket.emit(eventName, payload);
+      }
+    } catch (e) {
+      // Dead sockets after a refresh are expected; ignore emit errors.
+    }
   };
 };
 

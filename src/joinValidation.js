@@ -12,8 +12,11 @@ function validateJoin({ username, code, rooms, maxPlayers = MAX_PLAYERS }) {
   if (nameErr) return nameErr;
   const game = rooms.find((r) => r.getCode() === code);
   if (!game) return 'room_not_found';
-  if (game.getPlayersArray().some((p) => p === username)) return 'duplicate_name';
-  if (game.getNumPlayers() >= maxPlayers) return 'room_full';
+  const existing = game.players.find((p) => p.getUsername() === username);
+  // Same name is OK if that seat is waiting for a refresh reconnect.
+  if (existing && !existing.pendingDisconnect) return 'duplicate_name';
+  // Reclaiming a grace seat does not consume an extra slot.
+  if (!existing && game.getNumPlayers() >= maxPlayers) return 'room_full';
   return null;
 }
 

@@ -282,13 +282,16 @@ const Game = function (name, host) {
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
       playersData.push({
         username: this.players[pn].getUsername(),
-        status: this.players[pn].getStatus(),
+        status: this.players[pn].pendingDisconnect
+          ? 'Reconnecting'
+          : this.players[pn].getStatus(),
         blind: this.players[pn].getBlind(),
         dealer: this.players[pn].getDealer(),
         money: this.players[pn].getMoney(),
         buyIns: this.players[pn].buyIns,
         isChecked: this.playerIsChecked(this.players[pn]),
         readyState: this.players[pn].getReadyState(),
+        reconnecting: !!this.players[pn].pendingDisconnect,
       });
     }
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
@@ -867,11 +870,24 @@ const Game = function (name, host) {
     return player;
   };
 
-  // Reconnect a player who left: restore their chips & shame coins (buyIns)
-  // from when they disconnected, instead of starting fresh. Returns the player,
-  // or null if no saved session exists for this name (then addPlayer instead).
-  // If everyone leaves the room is reset/deleted, clearing these sessions.
+  // Reconnect a player who left. Prefers an in-progress grace-period seat
+  // (page refresh) so the hand continues; otherwise restores a finalized
+  // disconnect session (chips + shame coins). Returns null if neither exists.
   this.reconnectPlayer = (playerName, socket) => {
+    const live = this.players.find(
+      (p) => p.getUsername() === playerName && p.pendingDisconnect
+    );
+    if (live) {
+      if (live.disconnectTimer) {
+        clearTimeout(live.disconnectTimer);
+        live.disconnectTimer = null;
+      }
+      live.pendingDisconnect = false;
+      live.socket = socket;
+      this.rerender();
+      return live;
+    }
+
     const idx = this.disconnectedPlayers.findIndex(
       (p) => p.getUsername() === playerName
     );
@@ -879,9 +895,32 @@ const Game = function (name, host) {
     const player = this.disconnectedPlayers[idx];
     this.disconnectedPlayers.splice(idx, 1);
     player.socket = socket;
+    player.pendingDisconnect = false;
+    if (player.disconnectTimer) {
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+    }
     if (player.getMoney() > 0) player.setReadyState('undecided');
     this.players.push(player);
     return player;
+  };
+
+  // Mark a dropped socket so a refresh can reclaim the seat. Caller (app.js)
+  // owns the grace timer and must call disconnectPlayer if it expires.
+  this.markPendingDisconnect = (player) => {
+    if (!player || typeof player.getUsername !== 'function') return;
+    if (player.pendingDisconnect) return;
+    player.pendingDisconnect = true;
+    this.rerender();
+  };
+
+  this.clearPendingDisconnect = (player) => {
+    if (!player) return;
+    player.pendingDisconnect = false;
+    if (player.disconnectTimer) {
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+    }
   };
 
   this.getNumPlayers = () => {
@@ -1009,12 +1048,17 @@ const Game = function (name, host) {
   };
 
   this.disconnectPlayer = (player) => {
+    if (player.disconnectTimer) {
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+    }
+    player.pendingDisconnect = false;
     this.disconnectedPlayers.push(player);
 
-    const wasTheirTurn =
-      player.getStatus() === 'Their Turn' ||
-      this.roundData.turn === player.getUsername();
+    const wasTheirTurn = player.getStatus() === 'Their Turn';
+    let foldedNow = false;
 
+    // Mid-hand leave = fold. Their chips already in the pot stay there.
     if (this.roundInProgress && player.getStatus() !== 'Fold') {
       if (player.getBlind() === 'Big Blind' && this.roundData.bets.length === 1) {
         this.bigBlindWent = true;
@@ -1040,10 +1084,21 @@ const Game = function (name, host) {
         this.setCurrentRoundBets(stageBets);
       }
       this.lastMoveParsed = { move: 'Fold', player: player };
+      foldedNow = true;
+      this.recordAction('fold', player.socket, null);
     }
 
-    if (wasTheirTurn && this.roundInProgress) {
-      this.moveOntoNextPlayer();
+    if (this.roundInProgress && foldedNow) {
+      const [numNonFolds, nonFolderPlayer] = this.getNonFoldedPlayer();
+      if (numNonFolds == 1) {
+        // Leaving player was the last opponent — award pot immediately,
+        // whether or not it was their turn to act.
+        nonFolderPlayer.money =
+          this.getCurrentPot() + nonFolderPlayer.money;
+        this.endHandAllFold(nonFolderPlayer.getUsername());
+      } else if (wasTheirTurn) {
+        this.moveOntoNextPlayer();
+      }
     }
 
     this.players = this.players.filter((a) => a !== player);

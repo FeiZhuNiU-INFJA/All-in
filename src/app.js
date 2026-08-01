@@ -10,6 +10,7 @@ const {
   validateJoin,
   validateStart,
 } = require('./joinValidation.js');
+const { DISCONNECT_GRACE_MS } = require('./constants.js');
 
 const app = express();
 const server = http.createServer(app);
@@ -193,12 +194,20 @@ io.on('connection', (socket) => {
     const game = rooms.find(
       (r) => r.findPlayer(socket.id).socket.id === socket.id
     );
-    if (game != undefined) {
-      const player = game.findPlayer(socket.id);
+    if (game == undefined) return;
+    const player = game.findPlayer(socket.id);
+    if (!player || typeof player.getUsername !== 'function') return;
+
+    game.markPendingDisconnect(player);
+    if (player.disconnectTimer) clearTimeout(player.disconnectTimer);
+    player.disconnectTimer = setTimeout(() => {
+      player.disconnectTimer = null;
+      // Reconnected in time — leave them alone.
+      if (!player.pendingDisconnect) return;
+      if (game.players.indexOf(player) === -1) return;
       game.disconnectPlayer(player);
-      if (game.players.length == 0) {
+      if (game.players.length === 0) {
         if (game.persistent) {
-          // Keep the persistent lobby open but reset it for the next group.
           const code = game.getCode();
           rooms = rooms.map((r) => {
             if (r !== game) return r;
@@ -210,7 +219,7 @@ io.on('connection', (socket) => {
           rooms = rooms.filter((a) => a != game);
         }
       }
-    }
+    }, DISCONNECT_GRACE_MS);
   });
 });
 

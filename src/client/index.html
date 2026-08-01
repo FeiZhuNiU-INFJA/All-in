@@ -3,6 +3,9 @@
 
 <head>
 	<meta charset="utf-8" />
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,700;6..96,900&family=Figtree:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
 	<link href="css/materialize.min.css" type="text/css" rel="stylesheet" media="screen,projection" />
 	<link href="css/index.css" type="text/css" rel="stylesheet" media="screen,projection" />
 	<meta property="og:image" content="./img/pokerBanner.png" />
@@ -11,15 +14,19 @@
 	<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
 	<link rel="manifest" href="/site.webmanifest">
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<meta name="theme-color" content="#0a1f14">
+	<meta name="theme-color" content="#0a0c10">
 	<title>All-In</title>
 </head>
 
 <body>
+	<div class="room-atmosphere" aria-hidden="true">
+		<div class="room-lamp"></div>
+		<div class="room-grain"></div>
+	</div>
+
 	<div id="gameDiv" class="poker-room" style="display:none;">
 		<div class="table-hud">
 			<div id="table-title" class="table-hud-message"></div>
-			<div id="tableStage" class="table-hud-stage"></div>
 		</div>
 
 		<div class="table-stage">
@@ -27,11 +34,12 @@
 				<div class="table-rail"></div>
 				<div class="table-felt">
 					<div class="pot-area">
+						<span class="chip-icon chip-icon--pot" aria-hidden="true"></span>
 						<span class="pot-label">POT</span>
 						<span id="potAmount" class="pot-amount">$0</span>
 					</div>
 					<div id="communityCards" class="community-cards"></div>
-						<div id="countdown" class="felt-countdown"></div>
+					<div id="countdown" class="felt-countdown"></div>
 				</div>
 			</div>
 			<div id="opponentCards" class="seats-ring"></div>
@@ -46,6 +54,7 @@
 				<div id="mycards" class="hero-cards"></div>
 				<div class="hero-footer">
 					<span id="usernamesMoney" class="hero-stack">$0</span>
+					<span id="heroBet" class="seat-bet hero-bet" hidden></span>
 					<span id="status" class="hero-status"></span>
 				</div>
 			</div>
@@ -57,7 +66,7 @@
 					<button id="usernameBet" class="action-btn action-bet">Bet</button>
 					<button onClick="call()" id="usernameCall" class="action-btn action-call">Call</button>
 					<button id="usernameRaise" class="action-btn action-raise">Raise</button>
-				<button onClick="confirmAllIn()" id="usernameAllIn" class="action-btn action-allin">All-In</button>
+					<button onClick="confirmAllIn()" id="usernameAllIn" class="action-btn action-allin">All-In</button>
 				</div>
 			</div>
 		</div>
@@ -70,13 +79,19 @@
 	</div>
 
 	<div id="mainContent" class="lobby-screen">
-		<div class="lobby-card">
-			<h1 class="lobby-title">All-In</h1>
-			<p class="lobby-subtitle">局域网好友局 · 初始 2000 筹码</p>
+		<div class="lobby-hero">
+			<p class="lobby-kicker">私人好友局</p>
+			<h1 class="lobby-title">
+				<span class="lobby-title-all">All</span><span class="lobby-title-dash">-</span><span class="lobby-title-in">In</span>
+			</h1>
+			<p class="lobby-subtitle">初始 2000 筹码 · 推到极限</p>
 			<div class="lobby-actions">
 				<a id="hostButton" class="lobby-btn lobby-btn-primary" href="#">创建房间</a>
 				<a id="joinButton" class="lobby-btn lobby-btn-secondary" href="#">加入房间</a>
 			</div>
+			<span class="lobby-suit lobby-suit-a" aria-hidden="true">♠</span>
+			<span class="lobby-suit lobby-suit-b" aria-hidden="true">♥</span>
+			<span class="lobby-suit lobby-suit-c" aria-hidden="true">♣</span>
 		</div>
 	</div>
 
@@ -160,6 +175,20 @@
 			</div>
 			<div class="modal-footer">
 				<a href="#" class="modal-close modal-action-btn modal-action-muted">关闭</a>
+			</div>
+		</div>
+	</div>
+
+	<div id="confirmModal" class="lobby-modal">
+		<div class="modal-backdrop"></div>
+		<div class="modal-panel">
+			<div class="modal-content">
+				<h4 id="confirmTitle">确认</h4>
+				<p id="confirmMessage" style="margin: 10px 0 0; line-height: 1.65; opacity: 0.92"></p>
+			</div>
+			<div class="modal-footer">
+				<a href="#" id="confirmCancel" class="modal-action-btn modal-action-muted">取消</a>
+				<a href="#" id="confirmOk" class="modal-action-btn" style="margin-left: 10px">确认</a>
 			</div>
 		</div>
 	</div>

@@ -59,6 +59,14 @@ $(document).ready(function () {
   if ($('.tooltipped').length) {
     $('.tooltipped').tooltip({ delay: 50 });
   }
+
+  // Refresh recovery: rejoin the last room within the server grace window.
+  var session = loadSession();
+  if (session && session.code && session.username) {
+    myUsername = session.username;
+    roomCode = session.code;
+    socket.emit('join', { code: session.code, username: session.username });
+  }
 });
 
 function showActionBtn(sel) {
@@ -78,10 +86,37 @@ function hideAllActionBtns() {
   hideActionBtn('#usernameAllIn');
 }
 
+// Branded confirm dialog (replaces the ugly native window.confirm).
+var confirmCallback = null;
+function confirmDialog(title, message, onYes, danger) {
+  $('#confirmTitle').text(title || '确认');
+  $('#confirmMessage').text(message || '');
+  $('#confirmOk').toggleClass('modal-danger', !!danger);
+  confirmCallback = onYes;
+  openLobbyModal('#confirmModal');
+}
+$('#confirmOk').on('click', function (e) {
+  e.preventDefault();
+  closeLobbyModal();
+  var cb = confirmCallback;
+  confirmCallback = null;
+  if (typeof cb === 'function') cb();
+});
+$('#confirmCancel').on('click', function (e) {
+  e.preventDefault();
+  confirmCallback = null;
+  closeLobbyModal();
+});
+
 function confirmAllIn() {
-  if (window.confirm('确定要 All-In 吗？\n这将投入你的全部筹码。')) {
-    socket.emit('moveMade', { move: 'allin', bet: 'All-in' });
-  }
+  confirmDialog(
+    '确认 All-In',
+    '确定要 All-In 吗？这将投入你的全部筹码。',
+    function () {
+      socket.emit('moveMade', { move: 'allin', bet: 'All-in' });
+    },
+    true // danger -> red confirm button
+  );
 }
 
 var socket = io();
@@ -89,8 +124,32 @@ var gameInfo = null;
 var myUsername = '';
 var roomCode = '';
 
+var SESSION_KEY = 'allin_session';
+function saveSession(code, username) {
+  try {
+    sessionStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ code: String(code), username: String(username) })
+    );
+  } catch (e) {}
+}
+function loadSession() {
+  try {
+    var raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function clearSession() {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch (e) {}
+}
+
 /* ── Deal animation & sound ──────────────────────────── */
 var lastCommunityCount = 0; // community cards already shown — animate only new ones
+var skipNextDealAnim = false; // set on gameBegin so late joiners don't replay the deal animation
 var pendingDealAnim = false; // set on 'dealt' so the next rerender animates opponents' cards
 var lastActionSeq = 0; // last action sound played — de-dupe across rerenders
 var countdownInterval = null;
@@ -116,7 +175,7 @@ function startCountdown(kind, secs, label) {
   countdownKind = kind;
   countdownSecs = secs;
   var render = function () {
-    $('#countdown').text(label + ' ⏱ ' + countdownSecs + 's');
+    $('#countdown').text(label + ' ' + countdownSecs + 's');
   };
   render();
   countdownInterval = setInterval(function () {
@@ -144,6 +203,58 @@ function ensureAudio() {
 // Browsers block audio until a user gesture; unlock on the first interaction.
 $(document).one('click pointerdown keydown', ensureAudio);
 
+// Short mechanical switch click — pairs with the pressed-in button visuals.
+function playClickSound() {
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var t0 = ctx.currentTime;
+  var osc = ctx.createOscillator();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(220, t0);
+  osc.frequency.exponentialRampToValueAtTime(70, t0 + 0.035);
+  var og = ctx.createGain();
+  og.gain.setValueAtTime(0.0001, t0);
+  og.gain.exponentialRampToValueAtTime(0.07, t0 + 0.001);
+  og.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.04);
+  osc.connect(og);
+  og.connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + 0.045);
+
+  var dur = 0.018;
+  var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+  var d = buf.getChannelData(0);
+  for (var i = 0; i < d.length; i++) {
+    d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 4);
+  }
+  var src = ctx.createBufferSource();
+  src.buffer = buf;
+  var hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 1800;
+  var ng = ctx.createGain();
+  ng.gain.value = 0.1;
+  src.connect(hp);
+  hp.connect(ng);
+  ng.connect(ctx.destination);
+  src.start(t0);
+}
+
+var CLICKABLE_BTN =
+  '.action-btn, .lobby-btn, .modal-action-btn, .play-next-btn, .play-next-wrap button, .rebuy-btn, .spectate-btn';
+
+$(document).on('pointerdown', CLICKABLE_BTN, function (e) {
+  if (e.button != null && e.button !== 0) return;
+  var el = this;
+  if (el.disabled || $(el).is('[disabled]') || $(el).hasClass('disabled')) return;
+  $(el).addClass('is-pressed');
+  playClickSound();
+});
+
+$(document).on('pointerup pointercancel pointerleave', CLICKABLE_BTN, function () {
+  $(this).removeClass('is-pressed');
+});
+
 // Synthesized "card hitting the felt": a short, decaying filtered noise burst.
 // No external audio file, so it works fully offline on the LAN.
 function playDealSound() {
@@ -168,36 +279,7 @@ function playDealSound() {
   src.start();
 }
 
-// Chips clinking — a bet or a raise (a few chips stacking, scheduled on the
-// audio clock so the clinks stay tight regardless of JS timing).
-function playChipsSound() {
-  var ctx = ensureAudio();
-  if (!ctx) return;
-  for (var k = 0; k < 3; k++) {
-    var t0 = ctx.currentTime + k * 0.045;
-    var dur = 0.05;
-    var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
-    var d = buf.getChannelData(0);
-    for (var i = 0; i < d.length; i++)
-      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
-    var src = ctx.createBufferSource();
-    src.buffer = buf;
-    var bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = 2300 - k * 350;
-    bp.Q.value = 1.2;
-    var g = ctx.createGain();
-    g.gain.value = 0.28;
-    src.connect(bp);
-    bp.connect(g);
-    g.connect(ctx.destination);
-    src.start(t0);
-  }
-}
-
-// Coins showering down — a bet. Crisp, bright metallic clinks: a high sine
-// "tink" with a very short decay plus a bright noise strike, several of them
-// scattered so it reads as a handful of coins clattering.
+// Coins / chips clink — used for bet, call, raise, all-in, and pot collection.
 function playCoinsSound() {
   var ctx = ensureAudio();
   if (!ctx) return;
@@ -234,29 +316,6 @@ function playCoinsSound() {
     gN.connect(ctx.destination);
     srcN.start(t0);
   }
-}
-
-// A single chip placed — a call.
-function playCallSound() {
-  var ctx = ensureAudio();
-  if (!ctx) return;
-  var dur = 0.06;
-  var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
-  var d = buf.getChannelData(0);
-  for (var i = 0; i < d.length; i++)
-    d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2.5);
-  var src = ctx.createBufferSource();
-  src.buffer = buf;
-  var bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 1700;
-  bp.Q.value = 1;
-  var g = ctx.createGain();
-  g.gain.value = 0.32;
-  src.connect(bp);
-  bp.connect(g);
-  g.connect(ctx.destination);
-  src.start();
 }
 
 // A knuckle on the felt — a check.
@@ -304,12 +363,29 @@ function playFoldSound() {
 function playActionSound(move) {
   if (move === 'fold') return playFoldSound();
   if (move === 'check') return playCheckSound();
-  if (move === 'bet' || move === 'call') return playCoinsSound();
-  if (move === 'raise') return playChipsSound();
+  if (move === 'bet' || move === 'call' || move === 'raise' || move === 'allin') {
+    return playCoinsSound();
+  }
 }
 
 // A playing card carrying the deal-in animation class, with an optional
 // stagger delay (seconds) so a round of deals plays one after another.
+function cardFaceHtml(card) {
+  return (
+    '<span class="card-face">' +
+    '<span class="card-idx"><b>' +
+    card.value +
+    '</b></span>' +
+    '<span class="card-center">' +
+    card.suit +
+    '</span>' +
+    '<span class="card-idx card-idx-flip"><b>' +
+    card.value +
+    '</b></span>' +
+    '</span>'
+  );
+}
+
 function renderCardWithAnim(card, delaySec) {
   var cls =
     card.suit === '♠' || card.suit === '♣'
@@ -326,9 +402,7 @@ function renderCardWithAnim(card, delaySec) {
     ' ' +
     card.suit +
     '">' +
-    card.value +
-    ' ' +
-    card.suit +
+    cardFaceHtml(card) +
     '</div>'
   );
 }
@@ -336,50 +410,40 @@ function renderCardWithAnim(card, delaySec) {
 /* Seat positions around the oval table (top %, left %) */
 var SEAT_LAYOUTS = [
   [],
-  [{ top: '8%', left: '50%' }],
+  [{ top: '2%', left: '50%' }],
   [
-    { top: '10%', left: '30%' },
-    { top: '10%', left: '70%' },
+    { top: '4%', left: '28%' },
+    { top: '4%', left: '72%' },
   ],
   [
-    { top: '7%', left: '50%' },
-    { top: '22%', left: '16%' },
-    { top: '22%', left: '84%' },
+    { top: '2%', left: '50%' },
+    { top: '28%', left: '12%' },
+    { top: '28%', left: '88%' },
   ],
   [
-    { top: '8%', left: '26%' },
-    { top: '8%', left: '74%' },
-    { top: '38%', left: '6%' },
-    { top: '38%', left: '94%' },
-  ],
-  [
-    { top: '7%', left: '50%' },
-    { top: '14%', left: '20%' },
-    { top: '14%', left: '80%' },
+    { top: '2%', left: '26%' },
+    { top: '2%', left: '74%' },
     { top: '42%', left: '6%' },
     { top: '42%', left: '94%' },
   ],
   [
-    { top: '7%', left: '50%' },
-    { top: '13%', left: '22%' },
-    { top: '13%', left: '78%' },
-    { top: '38%', left: '6%' },
-    { top: '38%', left: '94%' },
-    { top: '55%', left: '50%' },
-  ],
-  [
-    { top: '7%', left: '38%' },
-    { top: '7%', left: '62%' },
-    { top: '20%', left: '12%' },
-    { top: '20%', left: '88%' },
+    { top: '2%', left: '50%' },
+    { top: '10%', left: '18%' },
+    { top: '10%', left: '82%' },
     { top: '42%', left: '6%' },
     { top: '42%', left: '94%' },
+  ],
+  [
+    { top: '2%', left: '50%' },
+    { top: '10%', left: '20%' },
+    { top: '10%', left: '80%' },
+    { top: '40%', left: '6%' },
+    { top: '40%', left: '94%' },
     { top: '58%', left: '50%' },
   ],
   [
-    { top: '7%', left: '32%' },
-    { top: '7%', left: '50%' },
-    { top: '7%', left: '68%' },
+    { top: '2%', left: '36%' },
+    { top: '2%', left: '64%' },
     { top: '22%', left: '10%' },
     { top: '22%', left: '90%' },
     { top: '42%', left: '6%' },
@@ -387,15 +451,25 @@ var SEAT_LAYOUTS = [
     { top: '58%', left: '50%' },
   ],
   [
-    { top: '7%', left: '28%' },
-    { top: '7%', left: '50%' },
-    { top: '7%', left: '72%' },
-    { top: '20%', left: '10%' },
-    { top: '20%', left: '90%' },
-    { top: '38%', left: '5%' },
-    { top: '38%', left: '95%' },
-    { top: '55%', left: '28%' },
-    { top: '55%', left: '72%' },
+    { top: '2%', left: '32%' },
+    { top: '2%', left: '50%' },
+    { top: '2%', left: '68%' },
+    { top: '24%', left: '8%' },
+    { top: '24%', left: '92%' },
+    { top: '42%', left: '6%' },
+    { top: '42%', left: '94%' },
+    { top: '58%', left: '50%' },
+  ],
+  [
+    { top: '2%', left: '28%' },
+    { top: '2%', left: '50%' },
+    { top: '2%', left: '72%' },
+    { top: '20%', left: '8%' },
+    { top: '20%', left: '92%' },
+    { top: '40%', left: '5%' },
+    { top: '40%', left: '95%' },
+    { top: '56%', left: '28%' },
+    { top: '56%', left: '72%' },
   ],
 ];
 
@@ -417,6 +491,7 @@ function seatStateClass(text) {
   if (text === 'Fold') return 'seat-folded';
   if (text === 'Their Turn') return 'seat-active';
   if (text === 'Spectating') return 'seat-spectating';
+  if (text === 'Reconnecting') return 'seat-reconnecting';
   return '';
 }
 
@@ -427,20 +502,6 @@ function abbrevBlind(blind) {
   if (blind.indexOf('Big') !== -1) return 'BB';
   return blind;
 }
-
-function joinErrorMessage(data) {
-  const code = data && data.error;
-  if (code === 'room_not_found') return 'Room not found. Check the code.';
-  if (code === 'room_full') return 'Room is full (max 10 players).';
-  if (code === 'duplicate_name') return 'That name is already taken in this room.';
-  if (code === 'invalid_name')
-    return 'Enter a valid name (1–12 characters).';
-  return 'Could not join. Check name/code and try again.';
-}
-
-socket.on('playerDisconnected', function (data) {
-  Materialize.toast(data.player + ' disconnected.', 4000);
-});
 
 function parseWinners(winners) {
   if (winners == null) return [];
@@ -453,32 +514,16 @@ function parseWinners(winners) {
     .filter(Boolean);
 }
 
-function shameTitle(count) {
-  if (!count || count <= 0) return '';
-  if (count >= 8) return '人形 ATM';
-  if (count >= 5) return '散财神';
-  if (count >= 3) return '慈善家';
-  return '送财童子';
-}
-
 function shameCoinsHtml(count) {
   if (!count || count <= 0) return '';
-  var title = shameTitle(count);
-  var shown = Math.min(count, 5);
-  var coins = '';
-  for (var i = 0; i < shown; i++) {
-    coins += '<span class="shame-coin" title="耻辱币"></span>';
-  }
-  if (count > 5) {
-    coins += '<span class="shame-count">×' + count + '</span>';
-  }
-  var titleHtml = title ? '<span class="shame-title">' + title + '</span>' : '';
   return (
     '<span class="shame-coins" title="' +
     count +
     ' 耻辱币">' +
-    coins +
-    titleHtml +
+    '<span class="shame-coin">辱</span>' +
+    '<span class="shame-count">×' +
+    count +
+    '</span>' +
     '</span>'
   );
 }
@@ -496,44 +541,19 @@ function maybeShowRebuyPrompt(money, roundInProgress) {
   else $('#rebuyBar').hide();
 }
 
-function rebuyErrorMessage(data) {
-  const code = data && data.error;
-  if (code === 'hand_in_progress')
-    return 'Wait until the hand finishes to rebuy.';
-  return 'Rebuy only when you have 0 chips.';
-}
-
 socket.on('rebuyResult', function (data) {
   if (!data || data.ok === false) {
-    Materialize.toast(rebuyErrorMessage(data), 3000);
     return;
   }
   $('#rebuyBar').hide();
-  var lines = [
-    'Rebuy +2000！耻辱币 +1 🐔',
-    '又输光了？没关系 +2000，耻辱币 +1',
-    '送财童子上线：+2000，耻辱币 +1',
-    '人形 ATM 已充值：+2000，耻辱币 +1',
-    '朋友们谢谢你：+2000，耻辱币 +1',
-    '钱多任性：+2000，耻辱币 +1',
-  ];
-  Materialize.toast(lines[Math.floor(Math.random() * lines.length)], 3500);
-});
-
-socket.on('playerRebuy', function (data) {
-  Materialize.toast(data.player + ' rebought (+shame coin)', 3000);
-});
-
-socket.on('waitingForPlayers', function () {
-  Materialize.toast('Waiting for at least two players with chips.', 4000);
 });
 
 socket.on('hostRoom', function (data) {
   if (data == undefined || data.ok === false) {
-    Materialize.toast(joinErrorMessage(data || { error: 'invalid_name' }), 4000);
     $('#joinButton').removeClass('disabled');
   } else {
     if (data.code != null) roomCode = String(data.code);
+    if (data.code && myUsername) saveSession(data.code, myUsername);
   }
   if (data == undefined || data.ok === false) {
     return;
@@ -608,11 +628,17 @@ socket.on('joinRoomUpdate', function (data) {
 
 socket.on('joinRoom', function (data) {
   if (data == undefined || data.ok === false) {
-    closeLobbyModal();
-    Materialize.toast(joinErrorMessage(data), 4000);
+    clearSession();
     $('#hostButton').removeClass('disabled');
   } else {
-    roomCode = String($('#code-field').val()).trim();
+    roomCode =
+      data.code != null
+        ? String(data.code)
+        : String($('#code-field').val()).trim();
+    if (!myUsername) {
+      myUsername = $('#joinName-field').val() || '';
+    }
+    if (roomCode && myUsername) saveSession(roomCode, myUsername);
     if (data.persistent) {
       // Persistent lobby: no fixed host, anyone can start once >= 2 are in.
       $('#joinModalContent').html(
@@ -628,7 +654,7 @@ socket.on('joinRoom', function (data) {
       $('#joinModalContent').html(
         '<h5>' +
           data.host +
-          "'s room</h5><hr /><h5>Players Currently in Room</h5><p>Please wait until your host starts the game. Leaving the page, refreshing, or going back will disconnect you from the game. </p>"
+          "'s room</h5><hr /><h5>Players Currently in Room</h5><p>刷新页面会在约 20 秒内自动回到房间。</p>"
       );
     }
     $('#playersNamesJoined').html(
@@ -676,10 +702,16 @@ socket.on('rerender', function (data) {
   // A new hand is starting — clear last hand's winner highlight.
   $('.seat-winner').removeClass('seat-winner');
   var nameLabel = data.username + shameCoinsHtml(data.buyIns);
-  if (data.myBet > 0) nameLabel += ' · Bet $' + data.myBet;
   $('#usernamesCards').html(nameLabel);
+  if (data.myBet > 0) {
+    $('#heroBet')
+      .html('<span class="chip-icon" aria-hidden="true"></span>$' + data.myBet)
+      .prop('hidden', false);
+  } else {
+    $('#heroBet').html('').prop('hidden', true);
+  }
   if (data.community != undefined) {
-    var prevCommunity = lastCommunityCount;
+    var prevCommunity = skipNextDealAnim ? data.community.length : lastCommunityCount;
     $('#communityCards').html(
       data.community.map(function (c, i) {
         if (i >= prevCommunity) {
@@ -692,15 +724,13 @@ socket.on('rerender', function (data) {
       })
     );
     lastCommunityCount = data.community.length;
+    skipNextDealAnim = false;
   } else {
     $('#communityCards').empty();
     lastCommunityCount = 0;
   }
   if (data.currBet == undefined) data.currBet = 0;
   $('#potAmount').text('$' + data.pot);
-  $('#tableStage').text(
-    'Hand #' + data.round + ' · ' + data.stage + ' · Top bet $' + data.topBet
-  );
   $('#table-title').text('');
   var styles = opponentSeatStyles(data.players.length);
   $('#opponentCards').html(
@@ -749,7 +779,7 @@ socket.on('rerender', function (data) {
     var turnPlayer = (data.players || []).filter(function (p) {
       return p.status === 'Their Turn';
     })[0];
-    if (turnPlayer) startCountdown('turn', 120, turnPlayer.username + ' 操作');
+    if (turnPlayer) startCountdown('turn', 120, turnPlayer.username + ' 思考中...');
     else if (countdownKind === 'turn') clearCountdown();
   } else if (countdownKind === 'turn') {
     clearCountdown();
@@ -760,17 +790,11 @@ socket.on('gameBegin', function (data) {
   $('#navbar-ptwu').hide();
   closeLobbyModal();
   if (data == undefined || data.ok === false) {
-    var msg = 'Could not start the game. Try again.';
-    if (data && data.error === 'not_enough_players') {
-      msg = 'Need at least 2 players to start.';
-    } else if (data && data.error === 'room_not_found') {
-      msg = 'Room not found. Create or join again.';
-    }
-    Materialize.toast(msg, 4000);
     return;
   }
   $('#mainContent').hide();
   $('#gameDiv').css('display', 'flex');
+  skipNextDealAnim = true; // late join / game start: don't replay the deal animation
 });
 
 function chooseReady(choice) {
@@ -827,14 +851,7 @@ socket.on('reveal', function (data) {
   hideAllActionBtns();
 
   var winners = parseWinners(data.winners);
-  for (var i = 0; i < winners.length; i++) {
-    if (winners[i] == data.username) {
-      Materialize.toast('You won the hand!', 4000);
-      break;
-    }
-  }
   $('#table-title').text('Winner: ' + winners.join(', '));
-  $('#tableStage').text('');
   $('#blindStatus').text(data.hand);
   $('#usernamesMoney').text('$' + data.money);
   maybeShowRebuyPrompt(data.money, false);
@@ -872,7 +889,6 @@ socket.on('endHand', function (data) {
   hideAllActionBtns();
   $('#table-title').text(data.winner + ' wins $' + data.pot);
   $('#potAmount').text('$' + data.pot);
-  $('#tableStage').text('');
   $('#blindStatus').text('');
   if (data.folded == 'Fold') {
     $('#status').text('Folded');
@@ -911,15 +927,10 @@ socket.on('endHand', function (data) {
 
 var beginHost = function () {
   if ($('#hostName-field').val() == '') {
-    $('.toast').hide();
-    closeLobbyModal();
-    Materialize.toast(
-      'Enter a valid name! (max length of name is 12 characters)',
-      4000
-    );
-    $('#joinButton').removeClass('disabled');
+    return;
   } else {
-    socket.emit('host', { username: $('#hostName-field').val() });
+    myUsername = $('#hostName-field').val();
+    socket.emit('host', { username: myUsername });
     $('#joinButton').addClass('disabled');
     $('#joinButton').off('click');
   }
@@ -932,18 +943,12 @@ var joinRoom = function () {
     $('#code-field').val() == '' ||
     $('#joinName-field').val().length > 12
   ) {
-    $('.toast').hide();
-    Materialize.toast(
-      'Enter a valid name/code! (max length of name is 12 characters.)',
-      4000
-    );
-    closeLobbyModal();
-    $('#hostButton').removeClass('disabled');
-    $('#hostButton').on('click');
+    return;
   } else {
+    myUsername = $('#joinName-field').val();
     socket.emit('join', {
       code: String($('#code-field').val()).trim(),
-      username: $('#joinName-field').val(),
+      username: myUsername,
     });
     $('#hostButton').addClass('disabled');
     $('#hostButton').off('click');
@@ -956,7 +961,6 @@ var startGame = function (gameCode) {
       ? String(gameCode).trim()
       : roomCode;
   if (!code) {
-    Materialize.toast('Missing room code. Create or join a room first.', 4000);
     return;
   }
   socket.emit('startGame', { code: code });
@@ -968,9 +972,9 @@ var fold = function () {
 
 var bet = function () {
   if (parseInt($('#betRangeSlider').val()) == 0) {
-    Materialize.toast('You must bet more than $0! Try again.', 4000);
+    return;
   } else if (parseInt($('#betRangeSlider').val()) < 2) {
-    Materialize.toast('The minimum bet is $2.', 4000);
+    return;
   } else {
     socket.emit('moveMade', {
       move: 'bet',
@@ -991,51 +995,37 @@ var raise = function () {
   var val = parseInt($('#raiseRangeSlider').val());
   var min = parseInt($('#raiseRangeSlider').prop('min'));
   if (val < min) {
-    Materialize.toast('加注金额过低，最小加注到 $' + min, 3000);
     return;
   }
   socket.emit('moveMade', { move: 'raise', bet: val });
 };
 
 function renderCard(card) {
-  if (card.suit == '♠' || card.suit == '♣')
-    return (
-      '<div class="playingCard_black" id="card"' +
-      card.value +
-      card.suit +
-      '" data-value="' +
-      card.value +
-      ' ' +
-      card.suit +
-      '">' +
-      card.value +
-      ' ' +
-      card.suit +
-      '</div>'
-    );
-  else
-    return (
-      '<div class="playingCard_red" id="card"' +
-      card.value +
-      card.suit +
-      '" data-value="' +
-      card.value +
-      ' ' +
-      card.suit +
-      '">' +
-      card.value +
-      ' ' +
-      card.suit +
-      '</div>'
-    );
+  var cls =
+    card.suit == '♠' || card.suit == '♣' ? 'playingCard_black' : 'playingCard_red';
+  return (
+    '<div class="' +
+    cls +
+    '" id="card' +
+    card.value +
+    card.suit +
+    '" data-value="' +
+    card.value +
+    ' ' +
+    card.suit +
+    '">' +
+    cardFaceHtml(card) +
+    '</div>'
+  );
 }
 
 function actionLabel(move, amount) {
-  if (move === 'fold') return '🚪 弃牌';
-  if (move === 'check') return '✋ 过牌';
-  if (move === 'call') return '💰 跟注';
-  if (move === 'bet') return '💸 下注 $' + amount;
-  if (move === 'raise') return '🔥 加注 $' + amount;
+  if (move === 'fold') return '弃牌';
+  if (move === 'check') return '过牌';
+  if (move === 'call') return '跟注';
+  if (move === 'bet') return '下注 $' + amount;
+  if (move === 'raise') return '加注 $' + amount;
+  if (move === 'allin') return 'All-In';
   return move;
 }
 
@@ -1168,12 +1158,17 @@ function renderSeat(name, data, style) {
   } else {
     cardsHtml = '<div class="blankCard"></div><div class="blankCard"></div>';
   }
-  var betHtml = bet > 0 ? '<div class="seat-bet">$' + bet + '</div>' : '';
+  var betHtml =
+    bet > 0
+      ? '<div class="seat-bet"><span class="chip-icon" aria-hidden="true"></span>$' + bet + '</div>'
+      : '';
   var statusHtml = '';
   if (data.text === 'Fold') statusHtml = '<div class="seat-status">Fold</div>';
   else if (data.isChecked) statusHtml = '<div class="seat-status">Check</div>';
   else if (data.text === 'Spectating')
     statusHtml = '<div class="seat-status">Spectating</div>';
+  else if (data.text === 'Reconnecting')
+    statusHtml = '<div class="seat-status seat-reconnecting-label">重连中…</div>';
   // Between hands, show each funded player's ready-up choice on their seat.
   if (
     data.roundInProgress === false &&
@@ -1190,9 +1185,12 @@ function renderSeat(name, data, style) {
   var handHtml = data.endHand
     ? '<div class="seat-hand">' + data.endHand + '</div>'
     : '';
+  var topPct = style && style.top != null ? parseFloat(style.top) : 50;
+  var edgeClass = topPct <= 16 ? ' seat-edge-top' : '';
   return (
     '<div class="table-seat ' +
     stateClass +
+    edgeClass +
     '" data-name="' +
     name +
     '" style="top:' +
@@ -1208,47 +1206,35 @@ function renderSeat(name, data, style) {
     '<div class="seat-cards">' +
     cardsHtml +
     '</div>' +
-    betHtml +
-    statusHtml +
-    handHtml +
     '<div class="seat-stack">$' +
     data.money +
     '</div>' +
+    betHtml +
+    statusHtml +
+    handHtml +
     '</div>'
   );
 }
 
 function renderOpponentCard(card) {
-  if (card.suit == '♠' || card.suit == '♣')
-    return (
-      '<div class="playingCard_black_opponent" id="card"' +
-      card.value +
-      card.suit +
-      '" data-value="' +
-      card.value +
-      ' ' +
-      card.suit +
-      '">' +
-      card.value +
-      ' ' +
-      card.suit +
-      '</div>'
-    );
-  else
-    return (
-      '<div class="playingCard_red_opponent" id="card"' +
-      card.value +
-      card.suit +
-      '" data-value="' +
-      card.value +
-      ' ' +
-      card.suit +
-      '">' +
-      card.value +
-      ' ' +
-      card.suit +
-      '</div>'
-    );
+  var cls =
+    card.suit == '♠' || card.suit == '♣'
+      ? 'playingCard_black_opponent'
+      : 'playingCard_red_opponent';
+  return (
+    '<div class="' +
+    cls +
+    '" id="card' +
+    card.value +
+    card.suit +
+    '" data-value="' +
+    card.value +
+    ' ' +
+    card.suit +
+    '">' +
+    cardFaceHtml(card) +
+    '</div>'
+  );
 }
 
 function updateBetDisplay() {
@@ -1328,12 +1314,10 @@ function renderSelf(data) {
   if (data.text == 'Their Turn') {
     $hero.addClass('seat-active');
     $('#status').text('Your Turn');
-    Materialize.toast('Your turn', 3000);
     socket.emit('evaluatePossibleMoves', {});
   } else if (data.text == 'Fold') {
     $hero.addClass('seat-folded');
     $('#status').text('Folded');
-    Materialize.toast('You folded', 3000);
     hideAllActionBtns();
   } else {
     $('#status').text('');

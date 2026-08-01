@@ -692,6 +692,37 @@ test('disconnect during hand folds the player', () => {
   expect(stage.some((b) => b.player === '3' && b.bet === 'Fold')).toBe(true);
 });
 
+test('heads-up opponent disconnect off-turn ends the hand as a fold win', () => {
+  const game = new Game('hu-disc-game', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+
+  const sock1 = new events.EventEmitter();
+  sock1.id = 1;
+  const sock2 = new events.EventEmitter();
+  sock2.id = 2;
+
+  game.addPlayer('1', sock1);
+  game.addPlayer('2', sock2);
+  game.startGame();
+
+  const actor = game.players.find((p) => p.status === 'Their Turn');
+  const other = game.players.find((p) => p !== actor);
+  expect(actor).toBeTruthy();
+  expect(other).toBeTruthy();
+
+  // The player who is NOT acting leaves — must still count as a fold and
+  // award the pot to the remaining player (hand must not stall).
+  const potBefore = game.getCurrentPot();
+  const actorMoneyBefore = actor.money;
+  game.disconnectPlayer(other);
+
+  expect(game.roundInProgress).toBe(false);
+  expect(game.players.length).toBe(1);
+  expect(game.players[0]).toBe(actor);
+  expect(actor.money).toBe(actorMoneyBefore + potBefore);
+});
+
 test('big blind disconnect during preflop sets bigBlindWent and unstalls the hand', () => {
   const game = new Game('bb-disc-game', '1');
   game.smallBlind = 5;
@@ -1324,6 +1355,64 @@ test('dealer button skips spectators when rotating', () => {
   // The dealer must not land on the watching (spectating) player.
   expect(game.players[game.roundData.dealer].spectating).toBe(false);
   expect(game.players[game.roundData.dealer].getReadyState()).not.toBe('watching');
+});
+
+test('reconnect during grace keeps the seat and does not fold', () => {
+  jest.useFakeTimers();
+  const game = new Game('grace-game', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  const p1 = addMockPlayer(game, 1);
+  const p2 = addMockPlayer(game, 2);
+  game.startGame();
+  expect(game.roundInProgress).toBe(true);
+
+  const actor = game.players.find((p) => p.status === 'Their Turn');
+  const other = game.players.find((p) => p !== actor);
+  const statusBefore = other.getStatus();
+  const moneyBefore = other.money;
+
+  game.markPendingDisconnect(other);
+  expect(other.pendingDisconnect).toBe(true);
+  expect(game.players.length).toBe(2);
+
+  const sNew = new events.EventEmitter();
+  sNew.id = 99;
+  const rc = game.reconnectPlayer(other.getUsername(), sNew);
+  expect(rc).toBe(other);
+  expect(other.pendingDisconnect).toBe(false);
+  expect(other.socket.id).toBe(99);
+  expect(other.getStatus()).toBe(statusBefore);
+  expect(other.money).toBe(moneyBefore);
+  expect(game.players.length).toBe(2);
+  expect(game.roundInProgress).toBe(true);
+
+  jest.useRealTimers();
+});
+
+test('grace expiry finalizes disconnect as a fold', () => {
+  jest.useFakeTimers();
+  const { DISCONNECT_GRACE_MS } = require('../../src/constants.js');
+  const game = new Game('grace-expire', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  addMockPlayer(game, 1);
+  addMockPlayer(game, 2);
+  game.startGame();
+
+  const actor = game.players.find((p) => p.status === 'Their Turn');
+  const other = game.players.find((p) => p !== actor);
+  game.markPendingDisconnect(other);
+
+  // Simulate app.js grace timer firing.
+  expect(other.pendingDisconnect).toBe(true);
+  game.disconnectPlayer(other);
+
+  expect(game.players.length).toBe(1);
+  expect(game.roundInProgress).toBe(false);
+  expect(game.players[0]).toBe(actor);
+
+  jest.useRealTimers();
 });
 
 test('reconnecting player keeps their chips and shame coins', () => {

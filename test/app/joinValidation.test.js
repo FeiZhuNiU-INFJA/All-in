@@ -5,11 +5,16 @@ const {
   MAX_PLAYERS,
 } = require('../../src/joinValidation.js');
 
-function fakeRoom({ code, players }) {
+function fakeRoom({ code, players, pendingNames = [] }) {
+  const playerObjs = players.map((name) => ({
+    getUsername: () => name,
+    pendingDisconnect: pendingNames.indexOf(name) !== -1,
+  }));
   return {
     getCode: () => code,
     getPlayersArray: () => players,
     getNumPlayers: () => players.length,
+    players: playerObjs,
   };
 }
 
@@ -33,6 +38,17 @@ test('join validation covers missing room, duplicate, and full', () => {
     'room_full'
   );
   expect(validateJoin({ username: 'Carol', code: '1234', rooms })).toBe(null);
+});
+
+test('join allows reclaiming a pending-disconnect seat', () => {
+  const rooms = [
+    fakeRoom({
+      code: '1234',
+      players: ['Alice', 'Bob'],
+      pendingNames: ['Alice'],
+    }),
+  ];
+  expect(validateJoin({ username: 'Alice', code: '1234', rooms })).toBe(null);
 });
 
 test('start requires two players', () => {
