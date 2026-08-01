@@ -171,12 +171,8 @@ io.on('connection', (socket) => {
     else if (data.move == 'call') ok = game.call(socket);
     else if (data.move == 'raise') ok = game.raise(socket, data.bet);
     else if (data.move == 'allin') ok = game.allIn(socket);
-    // Broadcast the resolved action so every client can play its sound /
-    // show the seat bet, THEN start the street-collect hold if needed.
-    if (ok) {
-      game.recordAction(data.move, socket, data.bet);
-      if (game.pendingStreetAdvance) game.scheduleStreetAdvance();
-    }
+    // Sound/seat bet first, then flush any deferred street hold/collect.
+    if (ok) game.finishResolvedAction(data.move, socket, data.bet);
   });
 
   socket.on('rebuy', () => {

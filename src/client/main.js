@@ -1061,6 +1061,7 @@ socket.on('dealt', function (data) {
 // While a street is holding before collect-to-pot, keep these seat amounts
 // painted even if a rerender rebuilds the ring.
 var streetHoldBets = null;
+var streetCollectClearMs = 750;
 
 function applyStreetHoldBets() {
   if (!streetHoldBets) return;
@@ -1091,6 +1092,10 @@ socket.on('actionSound', function (data) {
 // Street just closed: force every seat bet visible, then server waits holdMs.
 socket.on('holdStreetBets', function (data) {
   streetHoldBets = (data && data.bets) || {};
+  if (data && typeof data.collectMs === 'number' && data.collectMs > 0) {
+    // Clear seat labels slightly before the server advances the street.
+    streetCollectClearMs = Math.max(200, Math.min(data.collectMs - 100, data.collectMs));
+  }
   applyStreetHoldBets();
 });
 
@@ -1101,6 +1106,10 @@ socket.on('collectBets', function (data) {
   var pot = data && typeof data.pot === 'number' ? data.pot : null;
   var bets = (data && data.bets) || streetHoldBets || {};
   streetHoldBets = null;
+  var clearMs = streetCollectClearMs;
+  if (data && typeof data.collectMs === 'number' && data.collectMs > 0) {
+    clearMs = Math.max(200, Math.min(data.collectMs - 100, data.collectMs));
+  }
   // Prefer explicit seat list from the hold snapshot.
   var names = Object.keys(bets);
   if (names.length) {
@@ -1125,7 +1134,7 @@ socket.on('collectBets', function (data) {
   setTimeout(function () {
     clearAllSeatStreetBets();
     if (pot != null) $('#potAmount').text('$' + pot);
-  }, 750);
+  }, clearMs);
 });
 
 function paintSeatStreetBet(name, amount) {

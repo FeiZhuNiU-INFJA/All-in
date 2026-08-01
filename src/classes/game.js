@@ -119,18 +119,46 @@ const Game = function (name, host) {
   // This is decoupled from rerender on purpose: end-of-hand paths
   // (all-fold -> endHand, showdown -> reveal) never emit a rerender, so
   // piggybacking the sound on rerender would drop the final action's sound.
+  this.isStreetAdvancing = () =>
+    !!(this.streetAdvanceTimer || this.pendingStreetAdvance);
+
+  // Write/replace this player's numeric bet in the current street array.
+  this.setPlayerStreetBet = (player, amount) => {
+    const name = player.getUsername();
+    const round = this.getCurrentRoundBets();
+    if (round.some((a) => a.player == name)) {
+      this.setCurrentRoundBets(
+        round.map((a) => (a.player == name ? { player: name, bet: amount } : a))
+      );
+    } else {
+      round.push({ player: name, bet: amount });
+    }
+  };
+
   this.recordAction = (move, socket, amount) => {
     const player = this.findPlayer(socket.id);
-    const streetBet = player ? this.getPlayerBetInStage(player) : 0;
+    const hasPlayer = player && typeof player.getUsername === 'function';
+    const streetBet = hasPlayer ? this.getPlayerBetInStage(player) : 0;
     this.actionSeq++;
     this.emitPlayers('actionSound', {
       move: move,
-      player: player ? player.getUsername() : '',
+      player: hasPlayer ? player.getUsername() : '',
       seq: this.actionSeq,
       amount: typeof amount === 'number' ? amount : streetBet || null,
       // Total chips this player has in the current betting round (for seat UI).
       streetBet: streetBet,
     });
+  };
+
+  // Single exit for a resolved move: sound/UI first, then street hold if needed.
+  // Call sites must use this (or flushPendingStreetAdvance) so pending never stalls.
+  this.flushPendingStreetAdvance = () => {
+    if (this.pendingStreetAdvance) this.scheduleStreetAdvance();
+  };
+
+  this.finishResolvedAction = (move, socket, amount) => {
+    this.recordAction(move, socket, amount);
+    this.flushPendingStreetAdvance();
   };
 
   // Per-turn auto-act: if the player whose turn it is doesn't act within the
@@ -149,13 +177,12 @@ const Game = function (name, host) {
 
   this.autoAct = (player) => {
     if (!this.roundInProgress || player.getStatus() !== 'Their Turn') return;
-    if (this.streetAdvanceTimer || this.pendingStreetAdvance) return;
+    if (this.isStreetAdvancing()) return;
     const moves = this.getPossibleMoves(player.socket);
     const move = moves.check === 'yes' ? 'check' : 'fold';
     if (move === 'check') this.check(player.socket);
     else this.fold(player.socket);
-    this.recordAction(move, player.socket, null);
-    if (this.pendingStreetAdvance) this.scheduleStreetAdvance();
+    this.finishResolvedAction(move, player.socket, null);
   };
 
   // Ready-up phase timeout: if the ready-up drags on (someone AFK), auto-set
@@ -489,12 +516,14 @@ const Game = function (name, host) {
       bets: streetBets,
       pot: this.getCurrentPot(),
       holdMs: this.streetShowMs,
+      collectMs: this.streetCollectMs,
     });
 
     const runCollect = () => {
       this.emitPlayers('collectBets', {
         pot: this.getCurrentPot(),
         bets: streetBets,
+        collectMs: this.streetCollectMs,
       });
       const finish = () => {
         this.streetAdvanceTimer = null;
@@ -1257,7 +1286,7 @@ const Game = function (name, host) {
         this.endHandAllFold(nonFolderPlayer.getUsername());
       } else if (wasTheirTurn) {
         this.moveOntoNextPlayer();
-        if (this.pendingStreetAdvance) this.scheduleStreetAdvance();
+        this.flushPendingStreetAdvance();
       }
     }
 
@@ -1298,7 +1327,7 @@ const Game = function (name, host) {
   };
 
   this.fold = (socket) => {
-    if (this.streetAdvanceTimer) return false;
+    if (this.isStreetAdvancing()) return false;
     this.checkBigBlindWent(socket);
     const player = this.findPlayer(socket.id);
     let preFoldBetAmount = 0;
@@ -1333,104 +1362,35 @@ const Game = function (name, host) {
   };
 
   this.call = (socket) => {
-    if (this.streetAdvanceTimer) return false;
+    if (this.isStreetAdvancing()) return false;
     this.checkBigBlindWent(socket);
     const player = this.findPlayer(socket.id);
-    let currBet = this.getPlayerBetInStage(player);
+    if (!player || typeof player.getUsername !== 'function') return false;
+    const currBet = this.getPlayerBetInStage(player);
     const topBet = this.getCurrentTopBet();
-    if (currBet === 0) {
-      if (
-        this.getCurrentRoundBets().some((a) => a.player == player.getUsername())
-      ) {
-        if (player.getMoney() - topBet <= 0) {
-          this.setCurrentRoundBets(
-            this.getCurrentRoundBets().map((a) =>
-              a.player == player.getUsername()
-                ? { player: player.getUsername(), bet: player.getMoney() }
-                : a
-            )
-          );
-          player.money = 0;
-          player.allIn = true;
-        } else {
-          this.setCurrentRoundBets(
-            this.getCurrentRoundBets().map((a) =>
-              a.player == player.getUsername()
-                ? { player: player.getUsername(), bet: topBet }
-                : a
-            )
-          );
-          player.money = player.money - topBet;
-        }
-      } else {
-        if (player.getMoney() - topBet <= 0) {
-          this.getCurrentRoundBets().push({
-            player: player.getUsername(),
-            bet: player.getMoney(),
-          });
-          player.money = 0;
-          player.allIn = true;
-        } else {
-          this.getCurrentRoundBets().push({
-            player: player.getUsername(),
-            bet: topBet,
-          });
-          player.money = player.money - topBet;
-        }
-      }
-      this.moveOntoNextPlayer();
-      return true;
+    const need = topBet - currBet;
+    if (need < 0) return false;
+
+    if (player.getMoney() <= need) {
+      // All-in for the remainder (may be less than topBet).
+      this.setPlayerStreetBet(player, currBet + player.getMoney());
+      player.money = 0;
+      player.allIn = true;
     } else {
-      if (
-        this.getCurrentRoundBets().some((a) => a.player == player.getUsername())
-      ) {
-        if (player.getMoney() + currBet - topBet <= 0) {
-          this.setCurrentRoundBets(
-            this.getCurrentRoundBets().map((a) =>
-              a.player == player.getUsername()
-                ? {
-                    player: player.getUsername(),
-                    bet: player.getMoney() + currBet,
-                  }
-                : a
-            )
-          );
-          player.money = 0;
-          player.allIn = true;
-          this.moveOntoNextPlayer();
-        } else {
-          this.setCurrentRoundBets(
-            this.getCurrentRoundBets().map((a) =>
-              a.player == player.getUsername()
-                ? { player: player.getUsername(), bet: topBet }
-                : a
-            )
-          );
-          player.money = player.money - (topBet - currBet);
-          this.moveOntoNextPlayer();
-        }
-        return true;
-      } else {
-        this.log('this should not happen');
-      }
+      this.setPlayerStreetBet(player, topBet);
+      player.money -= need;
     }
+    this.moveOntoNextPlayer();
+    return true;
   };
 
   this.bet = (socket, bet) => {
-    if (this.streetAdvanceTimer) return false;
+    if (this.isStreetAdvancing()) return false;
     this.checkBigBlindWent(socket);
     if (bet >= this.bigBlind) {
       const player = this.findPlayer(socket.id);
       if (player.getMoney() - bet >= 0) {
-        this.setCurrentRoundBets(
-          this.getCurrentRoundBets().filter(
-            (a) => a.player != player.getUsername()
-          )
-        );
-        this.getCurrentRoundBets().push({
-          player: player.getUsername(),
-          bet: bet,
-        });
+        this.setPlayerStreetBet(player, bet);
         player.money = player.money - bet;
         if (player.money == 0) player.allIn = true;
         this.lastRaiseSize = bet; // an opening bet sets the new min-raise increment
@@ -1441,7 +1401,7 @@ const Game = function (name, host) {
   };
 
   this.check = (socket) => {
-    if (this.streetAdvanceTimer) return false;
+    if (this.isStreetAdvancing()) return false;
     this.checkBigBlindWent(socket);
     let currBet = 0;
     const player = this.findPlayer(socket.id);
@@ -1453,25 +1413,16 @@ const Game = function (name, host) {
       currBet = this.getCurrentRoundBets().find(
         (a) => a.player == player.getUsername()
       ).bet;
-      this.setCurrentRoundBets(
-        this.getCurrentRoundBets().map((a) =>
-          a.player == player.getUsername()
-            ? { player: player.getUsername(), bet: currBet }
-            : a
-        )
-      );
+      this.setPlayerStreetBet(player, currBet);
     } else {
-      this.getCurrentRoundBets().push({
-        player: player.getUsername(),
-        bet: currBet,
-      });
+      this.setPlayerStreetBet(player, currBet);
     }
     this.moveOntoNextPlayer();
     return true;
   };
 
   this.raise = (socket, bet) => {
-    if (this.streetAdvanceTimer) return false;
+    if (this.isStreetAdvancing()) return false;
     this.checkBigBlindWent(socket);
     const topBet = this.getCurrentTopBet();
     const player = this.findPlayer(socket.id);
@@ -1487,25 +1438,7 @@ const Game = function (name, host) {
       // All-in for less is allowed (but doesn't reopen the betting).
       (isAllIn || raiseIncrement >= this.lastRaiseSize)
     ) {
-      if (currBet === 0) {
-        this.setCurrentRoundBets(
-          this.getCurrentRoundBets().filter(
-            (a) => a.player != player.getUsername()
-          )
-        );
-        this.getCurrentRoundBets().push({
-          player: player.getUsername(),
-          bet: bet,
-        });
-      } else {
-        this.setCurrentRoundBets(
-          this.getCurrentRoundBets().map((a) =>
-            a.player == player.getUsername()
-              ? { player: player.getUsername(), bet: bet }
-              : a
-          )
-        );
-      }
+      this.setPlayerStreetBet(player, bet);
       player.money -= moneyToRemove;
       if (player.money == 0) player.allIn = true;
       if (raiseIncrement >= this.lastRaiseSize) this.lastRaiseSize = raiseIncrement;
@@ -1517,7 +1450,7 @@ const Game = function (name, host) {
   // All-in: shove all remaining chips. Routes to bet / call / raise on its own
   // so the client only needs a single "All-In" action.
   this.allIn = (socket) => {
-    if (this.streetAdvanceTimer) return false;
+    if (this.isStreetAdvancing()) return false;
     const player = this.findPlayer(socket.id);
     if (!player || player.getMoney() <= 0) return false;
     const topBet = this.getCurrentTopBet();

@@ -1627,3 +1627,123 @@ test('rerender payload includes seatIndex', () => {
   expect(payload).toBeTruthy();
   expect(payload.players.map((p) => p.seatIndex)).toEqual([0, 1]);
 });
+
+test('street close: hold bets visible, then collect, then advance', () => {
+  jest.useFakeTimers();
+  const game = new Game('street-hold', '1');
+  game.streetShowMs = 1500;
+  game.streetCollectMs = 900;
+
+  const sock1 = new events.EventEmitter();
+  sock1.id = 1;
+  const sock2 = new events.EventEmitter();
+  sock2.id = 2;
+  const emitted = [];
+  const track = (sock) => {
+    const orig = sock.emit.bind(sock);
+    sock.emit = (ev, data) => {
+      if (ev === 'holdStreetBets' || ev === 'collectBets' || ev === 'actionSound') {
+        emitted.push({ ev, data });
+      }
+      return orig(ev, data);
+    };
+  };
+  track(sock1);
+  track(sock2);
+
+  game.addPlayer('1', sock1);
+  game.addPlayer('2', sock2);
+  game.startGame();
+
+  const smallPlayer = game.players[game.roundData.smallBlind];
+  const bigPlayer = game.players[game.roundData.bigBlind];
+
+  // SB calls BB → pending street (HU: BB still to act)
+  expect(game.call(smallPlayer.socket)).toBe(true);
+  game.finishResolvedAction('call', smallPlayer.socket, null);
+  expect(game.pendingStreetAdvance).toBe(false);
+
+  // BB checks → street closes
+  expect(game.check(bigPlayer.socket)).toBe(true);
+  expect(game.pendingStreetAdvance).toBe(true);
+  expect(game.roundData.bets.length).toBe(1);
+  expect(game.getPlayerBetInStage(smallPlayer)).toBe(game.bigBlind);
+  expect(game.getPlayerBetInStage(bigPlayer)).toBe(game.bigBlind);
+
+  game.finishResolvedAction('check', bigPlayer.socket, null);
+  expect(game.pendingStreetAdvance).toBe(false);
+  expect(game.streetAdvanceTimer).toBeTruthy();
+
+  const hold = emitted.filter((e) => e.ev === 'holdStreetBets');
+  expect(hold.length).toBeGreaterThan(0);
+  expect(hold[hold.length - 1].data.bets[smallPlayer.getUsername()]).toBe(
+    game.bigBlind
+  );
+  expect(hold[hold.length - 1].data.holdMs).toBe(1500);
+  expect(hold[hold.length - 1].data.collectMs).toBe(900);
+  // Still on preflop during hold — seats still have the street bets.
+  expect(game.roundData.bets.length).toBe(1);
+  expect(game.community.length).toBe(0);
+
+  jest.advanceTimersByTime(1500);
+  const collect = emitted.filter((e) => e.ev === 'collectBets');
+  expect(collect.length).toBeGreaterThan(0);
+  expect(collect[collect.length - 1].data.collectMs).toBe(900);
+  expect(game.roundData.bets.length).toBe(1);
+
+  jest.advanceTimersByTime(900);
+  expect(game.streetAdvanceTimer).toBe(null);
+  expect(game.roundData.bets.length).toBe(2);
+  expect(game.community.length).toBe(3);
+
+  jest.useRealTimers();
+});
+
+test('setPlayerStreetBet replaces zero check entry', () => {
+  const game = new Game('street-bet-helper', '1');
+  const sock1 = new events.EventEmitter();
+  sock1.id = 1;
+  const sock2 = new events.EventEmitter();
+  sock2.id = 2;
+  game.addPlayer('1', sock1);
+  game.addPlayer('2', sock2);
+  game.startGame();
+  const p = game.players[0];
+  game.setCurrentRoundBets([{ player: p.getUsername(), bet: 0 }]);
+  expect(game.getPlayerBetInStage(p)).toBe(0);
+  game.setPlayerStreetBet(p, 40);
+  expect(game.getPlayerBetInStage(p)).toBe(40);
+  expect(game.getCurrentRoundBets()).toEqual([
+    { player: p.getUsername(), bet: 40 },
+  ]);
+});
+
+test('moves are blocked while streetAdvanceTimer is running', () => {
+  jest.useFakeTimers();
+  const game = new Game('street-block', '1');
+  game.streetShowMs = 1500;
+  game.streetCollectMs = 900;
+  const sock1 = new events.EventEmitter();
+  sock1.id = 1;
+  const sock2 = new events.EventEmitter();
+  sock2.id = 2;
+  game.addPlayer('1', sock1);
+  game.addPlayer('2', sock2);
+  game.startGame();
+
+  const smallPlayer = game.players[game.roundData.smallBlind];
+  const bigPlayer = game.players[game.roundData.bigBlind];
+  game.call(smallPlayer.socket);
+  game.finishResolvedAction('call', smallPlayer.socket, null);
+  game.check(bigPlayer.socket);
+  game.finishResolvedAction('check', bigPlayer.socket, null);
+
+  expect(game.isStreetAdvancing()).toBe(true);
+  expect(game.fold(smallPlayer.socket)).toBe(false);
+  expect(game.check(smallPlayer.socket)).toBe(false);
+  expect(game.call(smallPlayer.socket)).toBe(false);
+
+  jest.advanceTimersByTime(1500 + 900);
+  expect(game.isStreetAdvancing()).toBe(false);
+  jest.useRealTimers();
+});
