@@ -608,14 +608,25 @@ body.modal-open {
 .poker-room {
   display: flex;
   flex-direction: column;
+  /* svh = visible height with mobile browser chrome expanded — avoids
+     iOS Safari clipping the bottom action dock under the toolbar. */
+  height: 100vh;
   height: 100dvh;
-  max-height: 100dvh;
+  max-height: 100vh;
+  max-height: 100svh;
   overflow: hidden;
-  padding: 10px 12px 10px;
-  max-width: 1100px;
+  padding:
+    max(6px, env(safe-area-inset-top, 0px))
+    max(8px, env(safe-area-inset-right, 0px))
+    max(6px, env(safe-area-inset-bottom, 0px))
+    max(8px, env(safe-area-inset-left, 0px));
+  max-width: 1200px;
   margin: 0 auto;
   box-sizing: border-box;
   animation: room-enter 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  /* One shared beat for turn pulses (name / cards / chip / timer / actions). */
+  --turn-pulse: 1.2s;
+  --turn-pulse-ease: ease-in-out;
 }
 
 @keyframes room-enter {
@@ -642,13 +653,17 @@ body.modal-open {
   position: relative;
   z-index: 3;
   font-family: var(--font-mono);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 600;
   color: var(--brass);
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+  height: 1.2em;
   min-height: 1.2em;
-  margin-top: 4px;
+  margin: 0 0 4px;
   letter-spacing: 0.06em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: center;
 }
 
 /* ── Table Stage ──────────────────────────────────────── */
@@ -658,18 +673,23 @@ body.modal-open {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* Headroom for top-seat badges / action popups (absolute kids ignore padding,
-     so seats-ring is offset by the same amount below). */
-  padding: 48px 0 8px;
+  gap: 18px;
+  /* Headroom for top-seat badges / action popups. */
+  padding: 40px 0 8px;
+  width: 100%;
 }
 
 .poker-table {
   position: relative;
-  width: min(92vw, 780px);
-  max-height: 100%;
-  aspect-ratio: 2.2 / 1;
+  width: min(88vw, 820px);
+  flex: 0 1 auto;
+  height: auto;
+  max-height: min(48vh, 400px);
+  aspect-ratio: 2.1 / 1;
+  margin: 0 auto;
 }
 
 .table-rail {
@@ -755,7 +775,8 @@ body.modal-open {
   z-index: 1;
 }
 
-/* Tiny poker-chip glyph — amount sits beside it, never inside. */
+/* Tiny poker-chip glyph — amount sits beside it, never inside.
+   Trial: pot / seat bets can use .chip-lottie (Lottie) instead. */
 .chip-icon {
   flex-shrink: 0;
   width: 14px;
@@ -778,6 +799,20 @@ body.modal-open {
 .chip-icon--pot {
   width: 18px;
   height: 18px;
+}
+
+.chip-lottie {
+  flex-shrink: 0;
+  display: block;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.chip-lottie--pot {
+  width: 30px;
+  height: 30px;
 }
 
 .pot-area {
@@ -828,10 +863,7 @@ body.modal-open {
 
 .seats-ring {
   position: absolute;
-  top: 48px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   pointer-events: none;
   z-index: 5;
 }
@@ -848,10 +880,128 @@ body.modal-open {
   transition: opacity 0.2s;
 }
 
+.table-seat.seat-empty {
+  min-width: 36px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px dashed rgba(212, 181, 106, 0.14);
+  background: rgba(8, 12, 10, 0.16);
+  pointer-events: none;
+  opacity: 0.35;
+}
+
 /* Top-row seats hang downward from the anchor so the name/dealer badge
    don't spill above the stage and get clipped by overflow:hidden. */
 .table-seat.seat-edge-top {
   transform: translate(-50%, 0);
+}
+
+.table-seat.seat-edge-bottom {
+  transform: translate(-50%, -50%);
+}
+
+/* Hero on the bottom rail — same scale language as other seats. */
+.table-seat.seat-hero {
+  z-index: 8;
+  min-width: 120px;
+  gap: 3px;
+  padding: 2px 4px 4px;
+}
+
+/* Desktop: unwrap side so head / cards / meta stay a vertical stack. */
+.table-seat.seat-hero .seat-hero-side {
+  display: contents;
+}
+
+.table-seat.seat-hero .seat-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  max-width: 140px;
+  /* Keep head above cards when display:contents reorders by source. */
+  order: -1;
+}
+
+.table-seat.seat-hero .seat-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.table-seat.seat-hero .seat-cards {
+  transform: none;
+}
+
+/* Match opponent card footprint so hero doesn't cover name / buttons. */
+.table-seat.seat-hero .playingCard_black,
+.table-seat.seat-hero .playingCard_red {
+  height: 88px;
+  width: 62px;
+  border-radius: 6px;
+}
+
+.table-seat.seat-hero .card-idx {
+  top: 3px;
+  left: 4px;
+}
+
+.table-seat.seat-hero .card-idx.card-idx-flip {
+  top: auto;
+  left: auto;
+  bottom: 3px;
+  right: 4px;
+}
+
+.table-seat.seat-hero .card-idx b {
+  font-size: 1em;
+}
+
+.table-seat.seat-hero .card-center {
+  font-size: 1.35em;
+}
+
+.table-seat.seat-hero.seat-active {
+  filter: none;
+}
+
+.table-seat.seat-hero.seat-active .seat-name {
+  animation: seat-name-pulse var(--turn-pulse) var(--turn-pulse-ease) infinite;
+}
+
+.table-seat.seat-hero.seat-active .hero-status,
+.table-seat.seat-hero.seat-active #status {
+  color: #ffe9a8;
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(212, 181, 106, 0.7);
+}
+
+/* Keep action dock clear of the hero seat. */
+.poker-room:has(.seat-hero.seat-active) .action-dock {
+  filter: drop-shadow(0 0 10px rgba(212, 181, 106, 0.35));
+}
+
+.poker-room:has(.seat-hero.seat-active) .action-btn.action-on {
+  animation: action-btn-attention var(--turn-pulse) var(--turn-pulse-ease) infinite;
+}
+
+.seat-turn-timer {
+  display: inline-block;
+  margin-right: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #ffe9a8;
+  text-shadow:
+    0 0 10px rgba(212, 181, 106, 0.9),
+    0 1px 2px rgba(0, 0, 0, 0.85);
+  vertical-align: baseline;
+  /* No own animation — lives inside .seat-name which already pulses. */
 }
 
 .seat-name {
@@ -904,11 +1054,31 @@ body.modal-open {
   min-width: 0;
 }
 
+/* Thinking: same chip motion as a posted bet/blind, no amount. */
+.seat-thinking-chip {
+  min-width: 18px;
+  min-height: 18px;
+}
+
 .seat-hand {
-  font-size: 0.68rem;
-  color: rgba(244, 239, 230, 0.72);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(255, 233, 168, 0.95);
   font-style: italic;
   font-family: var(--font-display);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+  white-space: nowrap;
+  max-width: 9.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seat-winner .seat-hand {
+  color: #ffe9a8;
+  font-weight: 700;
+  text-shadow:
+    0 0 10px rgba(212, 181, 106, 0.75),
+    0 1px 3px rgba(0, 0, 0, 0.85);
 }
 
 .seat-blind {
@@ -920,6 +1090,10 @@ body.modal-open {
   padding: 1px 5px;
   letter-spacing: 0.04em;
   font-weight: 600;
+}
+
+.seat-blind:empty {
+  display: none;
 }
 
 .seat-dealer {
@@ -939,25 +1113,100 @@ body.modal-open {
 }
 
 .seat-active .seat-name {
-  color: var(--brass);
+  color: #ffe9a8;
+  font-weight: 800;
+  text-shadow:
+    0 0 12px rgba(212, 181, 106, 0.95),
+    0 1px 3px rgba(0, 0, 0, 0.9);
+  animation: seat-name-pulse var(--turn-pulse) var(--turn-pulse-ease) infinite;
 }
 
 .seat-active {
-  filter: drop-shadow(0 0 6px rgba(212, 181, 106, 0.45));
+  z-index: 12;
 }
 
+.seat-active::before,
 .seat-active::after {
-  content: "";
-  position: absolute;
-  inset: -6px;
-  border: 1.5px solid rgba(212, 181, 106, 0.65);
-  border-radius: 6px;
-  animation: pulse-ring 1.6s ease-in-out infinite;
+  content: none;
+  display: none;
 }
 
-@keyframes pulse-ring {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
+/* Soft pulse on hole cards while this seat is acting. */
+.seat-active .seat-cards {
+  animation: seat-cards-pulse var(--turn-pulse) var(--turn-pulse-ease) infinite;
+}
+
+.seat-active .seat-bet,
+.seat-active .seat-thinking-chip {
+  animation: seat-chip-pulse var(--turn-pulse) var(--turn-pulse-ease) infinite;
+}
+
+@keyframes seat-name-pulse {
+  0%, 100% {
+    opacity: 0.55;
+    color: #e6c878;
+    text-shadow:
+      0 0 4px rgba(212, 181, 106, 0.35),
+      0 1px 3px rgba(0, 0, 0, 0.9);
+  }
+  50% {
+    opacity: 1;
+    color: #fff3c4;
+    text-shadow:
+      0 0 18px rgba(255, 232, 160, 1),
+      0 0 8px rgba(212, 181, 106, 0.9),
+      0 1px 3px rgba(0, 0, 0, 0.9);
+  }
+}
+
+@keyframes seat-cards-pulse {
+  0%, 100% {
+    filter: brightness(0.92) drop-shadow(0 0 2px rgba(212, 181, 106, 0.2));
+    transform: translateY(0);
+  }
+  50% {
+    filter: brightness(1.12) drop-shadow(0 0 12px rgba(255, 232, 160, 0.75));
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes seat-chip-pulse {
+  0%, 100% { opacity: 0.65; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+/* Hide turn chrome while hole/community cards are still dealing. */
+.poker-room.is-dealing .felt-countdown {
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+.poker-room.is-dealing .table-seat.seat-active {
+  filter: none !important;
+}
+
+.poker-room.is-dealing .table-seat.seat-active .seat-name,
+.poker-room.is-dealing .table-seat.seat-active .seat-cards,
+.poker-room.is-dealing .table-seat.seat-active .seat-bet,
+.poker-room.is-dealing .table-seat.seat-active .seat-thinking-chip {
+  animation: none !important;
+  filter: none !important;
+  transform: none !important;
+}
+
+.poker-room.is-dealing .seat-turn-timer {
+  display: none !important;
+}
+
+.poker-room.is-dealing .seat-hero.seat-active {
+  filter: none !important;
+}
+
+.poker-room.is-dealing .seat-hero.seat-active .hero-status,
+.poker-room.is-dealing .seat-hero.seat-active #status {
+  animation: none !important;
+  color: inherit !important;
+  text-shadow: none !important;
 }
 
 .seat-folded {
@@ -990,6 +1239,34 @@ body.modal-open {
   animation: winner-glow 1s ease-in-out infinite;
 }
 
+.seat-winner-badge {
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #1a1208;
+  background: linear-gradient(180deg, #f0d78a 0%, var(--brass) 100%);
+  border: 1px solid rgba(255, 240, 200, 0.55);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.45),
+    0 0 18px rgba(212, 181, 106, 0.35);
+  white-space: nowrap;
+  z-index: 30;
+  pointer-events: none;
+  animation: winner-badge-in 0.45s cubic-bezier(0.2, 0.85, 0.3, 1) both;
+}
+
+@keyframes winner-badge-in {
+  0% { transform: translateX(-50%) translateY(8px) scale(0.7); opacity: 0; }
+  100% { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; }
+}
+
 @keyframes winner-glow {
   0%, 100% {
     filter: drop-shadow(0 0 6px rgba(212, 181, 106, 0.55));
@@ -1003,6 +1280,18 @@ body.modal-open {
   border-color: rgba(212, 181, 106, 0.95) !important;
   box-shadow: 0 0 28px rgba(212, 181, 106, 0.55) !important;
   transform: scale(1.03);
+}
+
+.seat-hero.seat-winner {
+  filter: drop-shadow(0 0 14px rgba(255, 215, 100, 0.9));
+}
+
+.hero-seat .seat-winner-badge {
+  top: -14px;
+}
+
+.seat-hero .seat-winner-badge {
+  top: -22px;
 }
 
 /* ── Action popup ─────────────────────────────────────── */
@@ -1074,18 +1363,86 @@ body.modal-open {
 .hero-seat {
   position: relative;
   background: linear-gradient(180deg, rgba(18, 22, 30, 0.82), rgba(10, 12, 16, 0.9));
-  border: 1px solid rgba(212, 181, 106, 0.28);
+  border: 2px solid rgba(212, 181, 106, 0.28);
   border-radius: 6px;
   padding: 8px 16px 6px;
   min-width: 240px;
   text-align: center;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .hero-seat.seat-active {
-  border-color: rgba(212, 181, 106, 0.85);
-  box-shadow: 0 0 22px rgba(212, 181, 106, 0.28);
+  border-color: rgba(255, 232, 160, 1);
+  background:
+    linear-gradient(180deg, rgba(80, 58, 18, 0.55), rgba(18, 22, 30, 0.92) 42%),
+    linear-gradient(180deg, rgba(18, 22, 30, 0.82), rgba(10, 12, 16, 0.9));
+  box-shadow:
+    0 0 0 3px rgba(212, 181, 106, 0.55),
+    0 0 40px rgba(212, 181, 106, 0.7),
+    0 8px 28px rgba(0, 0, 0, 0.45);
+  overflow: visible;
+  animation: hero-box-glow 1.2s ease-in-out infinite;
+}
+
+.hero-seat.seat-active::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 8px;
+  border: 2px solid rgba(255, 240, 180, 0.85);
+  animation: hero-ring-flash 1.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.hero-seat.seat-active::after {
+  display: none;
+}
+
+.hero-seat.seat-active .hero-status {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #ffe9a8;
+  text-shadow: 0 0 12px rgba(212, 181, 106, 0.9);
+  animation: hero-status-blink 1s ease-in-out infinite;
+}
+
+.hero-panel:has(.hero-seat.seat-active) .action-bar {
+  filter: drop-shadow(0 0 14px rgba(212, 181, 106, 0.45));
+}
+
+.hero-panel:has(.hero-seat.seat-active) .action-btn.action-on {
+  animation: action-btn-attention var(--turn-pulse) var(--turn-pulse-ease) infinite;
+}
+
+@keyframes hero-box-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 0 3px rgba(212, 181, 106, 0.4),
+      0 0 22px rgba(212, 181, 106, 0.45),
+      0 8px 28px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(255, 232, 160, 0.75),
+      0 0 48px rgba(212, 181, 106, 0.85),
+      0 8px 28px rgba(0, 0, 0, 0.45);
+  }
+}
+
+@keyframes hero-ring-flash {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+@keyframes hero-status-blink {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+@keyframes action-btn-attention {
+  0%, 100% { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+  50% { box-shadow: 0 0 16px rgba(255, 232, 160, 0.55); }
 }
 
 .hero-seat.seat-folded {
@@ -1115,13 +1472,18 @@ body.modal-open {
   border-radius: 2px;
   padding: 1px 6px;
   min-height: 1.1em;
+  min-width: 1.4em;
   font-weight: 600;
+  box-sizing: border-box;
 }
 
 .hero-blind:empty {
-  background: none;
-  min-height: 0;
-  padding: 0;
+  background: transparent;
+  color: transparent;
+  border: none;
+  /* Keep size so empty ↔ SB/BB never shifts the hero panel. */
+  min-height: 1.1em;
+  padding: 1px 6px;
 }
 
 .hero-cards {
@@ -1162,14 +1524,25 @@ body.modal-open {
 
 /* ── Action Bar ───────────────────────────────────────── */
 
-.action-bar {
+.action-bar,
+.action-dock {
   position: relative;
   flex-shrink: 0;
   width: 100%;
-  height: 58px;
+  max-width: 640px;
+  min-height: 52px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 6px;
+  /* Keep buttons above iPhone home indicator / Safari bottom chrome. */
+  padding:
+    4px 8px
+    max(10px, calc(env(safe-area-inset-bottom, 0px) + 8px));
+  z-index: 6;
+  margin: 4px auto 0;
+  box-sizing: border-box;
 }
 
 .play-next-wrap {
@@ -1365,13 +1738,6 @@ body.modal-open {
   justify-content: center;
 }
 
-.ready-phase-hint {
-  font-size: 0.8rem;
-  opacity: 0.85;
-  width: 100%;
-  text-align: center;
-}
-
 /* ── Playing Cards ────────────────────────────────────── */
 
 .playingCard_black,
@@ -1432,8 +1798,10 @@ body.modal-open {
   display: flex;
   flex-direction: column;
   align-items: center;
-  line-height: 1;
+  line-height: 0.95;
+  gap: 0;
   font-style: normal;
+  z-index: 1;
 }
 
 .card-idx b {
@@ -1444,12 +1812,16 @@ body.modal-open {
   paint-order: stroke fill;
 }
 
-.card-idx-flip {
+/* Higher specificity than ".foo .card-idx { left }" so left/top
+   actually clear — otherwise left+right stretch the box and the
+   rotated rank looks centered on the card. */
+.card-idx.card-idx-flip {
   top: auto;
   left: auto;
   bottom: 4px;
   right: 5px;
   transform: rotate(180deg);
+  transform-origin: center center;
 }
 
 .card-center {
@@ -1461,7 +1833,9 @@ body.modal-open {
   font-size: 1.65em;
   font-weight: 800;
   line-height: 1;
+  padding-top: 0.1em;
   opacity: 1;
+  z-index: 0;
   -webkit-text-stroke: 0.4px currentColor;
   paint-order: stroke fill;
 }
@@ -1472,8 +1846,8 @@ body.modal-open {
   left: 3px;
 }
 
-.playingCard_black_opponent .card-idx-flip,
-.playingCard_red_opponent .card-idx-flip {
+.playingCard_black_opponent .card-idx.card-idx-flip,
+.playingCard_red_opponent .card-idx.card-idx-flip {
   top: auto;
   left: auto;
   bottom: 2px;
@@ -1538,8 +1912,25 @@ body.modal-open {
   width: 60px;
 }
 
+.community-cards .card-idx {
+  top: 5px;
+  left: 6px;
+}
+
+.community-cards .card-idx b {
+  font-size: 1.05em;
+}
+
+.community-cards .card-idx.card-idx-flip {
+  top: auto;
+  left: auto;
+  bottom: 5px;
+  right: 6px;
+}
+
 .community-cards .card-center {
-  font-size: 1.4em;
+  font-size: 1.45em;
+  padding-top: 0.15em;
 }
 
 /* ── Deal animation ───────────────────────────────────── */
@@ -1657,20 +2048,24 @@ body.modal-open {
   }
 
   .poker-room {
-    padding: max(8px, env(safe-area-inset-top, 0px)) 4px 6px;
+    padding:
+      max(8px, env(safe-area-inset-top, 0px))
+      12px
+      max(8px, env(safe-area-inset-bottom, 0px));
   }
 
   /* Leave room above the oval so the top seat's name isn't clipped
      (seats use translate(-50%, -50%), so half the seat sits above the anchor). */
   .table-stage {
-    padding: 56px 0 8px;
+    padding: 48px 12px 8px;
+  }
+
+  .action-dock {
+    padding-bottom: max(12px, calc(env(safe-area-inset-bottom, 0px) + 10px));
   }
 
   .seats-ring {
-    top: 56px;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    inset: 0;
   }
 
   .table-felt {
@@ -1688,36 +2083,45 @@ body.modal-open {
   }
 
   .poker-table {
-    width: min(96vw, 100%);
-    max-height: 36vh;
+    width: min(88vw, 100%);
+    max-height: 30vh;
+    aspect-ratio: 2.6 / 1;
   }
 
   .table-rail {
-    inset: -10px;
+    inset: -7px;
   }
 
   .community-cards {
-    min-height: 64px;
-  }
-
-  .playingCard_black,
-  .playingCard_red {
-    height: 64px;
-    width: 44px;
-  }
-
-  .hero-cards {
-    min-height: 76px;
-  }
-
-  .hero-cards .playingCard_black,
-  .hero-cards .playingCard_red {
-    height: 76px;
-    width: 52px;
+    min-height: 52px;
   }
 
   .community-cards .playingCard_black,
   .community-cards .playingCard_red {
+    height: 52px;
+    width: 36px;
+  }
+
+  .community-cards .card-idx {
+    top: 3px;
+    left: 3px;
+  }
+
+  .community-cards .card-idx b {
+    font-size: 0.75rem;
+  }
+
+  .community-cards .card-idx-flip {
+    display: none;
+  }
+
+  .community-cards .card-center {
+    font-size: 1.15rem;
+    padding-top: 0.22em;
+  }
+
+  .table-seat.seat-hero .playingCard_black,
+  .table-seat.seat-hero .playingCard_red {
     height: 58px;
     width: 40px;
   }
@@ -1725,8 +2129,30 @@ body.modal-open {
   .blankCard,
   .playingCard_black_opponent,
   .playingCard_red_opponent {
-    height: 48px;
-    width: 34px;
+    height: 42px;
+    width: 30px;
+  }
+
+  .playingCard_black_opponent .card-idx-flip,
+  .playingCard_red_opponent .card-idx-flip {
+    display: none;
+  }
+
+  .playingCard_black_opponent .card-idx,
+  .playingCard_red_opponent .card-idx {
+    top: 2px;
+    left: 3px;
+  }
+
+  .playingCard_black_opponent .card-idx b,
+  .playingCard_red_opponent .card-idx b {
+    font-size: 0.68rem;
+  }
+
+  .playingCard_black_opponent .card-center,
+  .playingCard_red_opponent .card-center {
+    font-size: 0.95rem;
+    padding-top: 0.2em;
   }
 
   .hero-seat {
@@ -1737,8 +2163,8 @@ body.modal-open {
   }
 
   .action-bar {
-    height: auto;
-    min-height: 50px;
+    height: 58px;
+    min-height: 58px;
   }
 
   .action-buttons {
@@ -1758,15 +2184,11 @@ body.modal-open {
 
 @media (max-height: 700px) {
   .table-stage {
-    padding-top: 52px;
-  }
-
-  .seats-ring {
-    top: 52px;
+    padding-top: 40px;
   }
 
   .poker-table {
-    max-height: 32vh;
+    max-height: min(44vh, 360px);
   }
 
   .hero-cards {
@@ -1799,4 +2221,333 @@ body.modal-open {
   .lobby-suit {
     animation: none !important;
   }
+}
+
+/* ── Mobile landscape preference ──────────────────────── */
+.rotate-hint {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 12, 0.94);
+  padding: 24px;
+  text-align: center;
+}
+
+.rotate-hint-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  color: var(--ivory);
+  font-family: var(--font-body);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.rotate-hint-phone {
+  width: 42px;
+  height: 68px;
+  border: 2.5px solid var(--brass);
+  border-radius: 8px;
+  box-shadow: 0 0 18px rgba(212, 181, 106, 0.35);
+  animation: rotate-phone-hint 1.6s ease-in-out infinite;
+}
+
+@keyframes rotate-phone-hint {
+  0%, 20% { transform: rotate(0deg); }
+  45%, 70% { transform: rotate(90deg); }
+  100% { transform: rotate(90deg); }
+}
+
+/* Portrait phone / narrow: ask to rotate while in the poker room. */
+@media (orientation: portrait) and (max-width: 900px) {
+  body.in-game .rotate-hint {
+    display: flex;
+  }
+
+  body.in-game #gameDiv {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
+/* Landscape phones: board on the oval, hole cards hang under the rail
+   (not on top of community), then the action dock. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .poker-room {
+    padding:
+      max(4px, env(safe-area-inset-top, 0px))
+      max(16px, env(safe-area-inset-right, 0px), env(safe-area-inset-left, 0px))
+      max(4px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .table-stage {
+    padding: 20px 12px 0;
+    gap: 0;
+    justify-content: center;
+  }
+
+  .poker-table {
+    /* Height-driven so iOS respects the flatter oval.
+       !important beats the generic max-height:700px rule. */
+    width: auto;
+    height: min(44svh, 210px) !important;
+    max-height: min(44svh, 210px) !important;
+    max-width: min(78vw, 700px);
+    aspect-ratio: 2.65 / 1;
+    /* Reserve a band under the oval for hero cards + side info. */
+    margin-bottom: 82px;
+  }
+
+  .table-rail {
+    inset: -7px;
+  }
+
+  .table-felt {
+    gap: 3px;
+    justify-content: center;
+    padding: 6% 0 14%;
+  }
+
+  .felt-countdown {
+    font-size: 0.78rem;
+    margin-bottom: 2px;
+  }
+
+  .pot-area {
+    transform: none;
+  }
+
+  .pot-label {
+    font-size: 0.62rem;
+  }
+
+  .pot-amount {
+    font-size: 0.9rem;
+  }
+
+  .table-seat {
+    min-width: 70px;
+    gap: 1px;
+  }
+
+  /* Sit the whole hero block under the rail — clears the board.
+     Cards left, identity / stack / blind on the right. */
+  .table-seat.seat-hero {
+    top: 100% !important;
+    left: 50% !important;
+    transform: translate(-50%, 8px);
+    min-width: 0;
+    z-index: 20;
+    gap: 8px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .table-seat.seat-hero .seat-hero-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 3px;
+    min-width: 4.5rem;
+  }
+
+  .table-seat.seat-hero .seat-head {
+    order: 0;
+    max-width: none;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .table-seat.seat-hero .seat-name {
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+
+  .table-seat.seat-hero .seat-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: 2px;
+  }
+
+  .table-seat.seat-hero .playingCard_black,
+  .table-seat.seat-hero .playingCard_red {
+    height: 56px;
+    width: 40px;
+  }
+
+  .table-seat.seat-hero .card-idx {
+    top: 3px;
+    left: 4px;
+  }
+
+  .table-seat.seat-hero .card-idx b {
+    font-size: 0.78rem;
+  }
+
+  .table-seat.seat-hero .card-idx-flip {
+    display: none;
+  }
+
+  .table-seat.seat-hero .card-center {
+    font-size: 1.15rem;
+    padding-top: 0.2em;
+  }
+
+  .table-seat.seat-hero .seat-stack,
+  .table-seat.seat-hero .seat-status {
+    font-size: 0.72rem;
+  }
+
+  .table-seat.seat-hero .seat-stack {
+    font-weight: 800;
+    color: #ffe9a8;
+  }
+
+  /* Board cards: roomier face, no flipped corner (too cramped). */
+  .community-cards {
+    min-height: 54px;
+    gap: 5px;
+  }
+
+  .community-cards .playingCard_black,
+  .community-cards .playingCard_red {
+    height: 54px;
+    width: 38px;
+  }
+
+  .community-cards .card-idx {
+    top: 3px;
+    left: 4px;
+  }
+
+  .community-cards .card-idx b {
+    font-size: 0.78rem;
+  }
+
+  .community-cards .card-idx-flip {
+    display: none;
+  }
+
+  .community-cards .card-center {
+    font-size: 1.2rem;
+    padding-top: 0.25em;
+  }
+
+  .blankCard,
+  .playingCard_black_opponent,
+  .playingCard_red_opponent {
+    height: 40px;
+    width: 28px;
+  }
+
+  .playingCard_black_opponent .card-idx-flip,
+  .playingCard_red_opponent .card-idx-flip {
+    display: none;
+  }
+
+  .playingCard_black_opponent .card-idx,
+  .playingCard_red_opponent .card-idx {
+    top: 2px;
+    left: 3px;
+  }
+
+  .playingCard_black_opponent .card-idx b,
+  .playingCard_red_opponent .card-idx b {
+    font-size: 0.66rem;
+  }
+
+  .playingCard_black_opponent .card-center,
+  .playingCard_red_opponent .card-center {
+    font-size: 0.9rem;
+    padding-top: 0.2em;
+  }
+
+  .seat-name {
+    font-size: 0.68rem;
+  }
+
+  .seat-stack {
+    font-size: 0.62rem;
+  }
+
+  .seat-blind,
+  .seat-dealer {
+    font-size: 0.52rem;
+    padding: 1px 4px;
+  }
+
+  .action-dock {
+    min-height: 40px;
+    max-width: min(560px, 92vw);
+    margin-top: 2px;
+    padding-top: 4px;
+    padding-bottom: max(8px, calc(env(safe-area-inset-bottom, 0px) + 6px));
+  }
+
+  .action-btn {
+    padding: 8px 12px;
+    height: 40px;
+    font-size: 0.76rem;
+    min-width: 64px;
+  }
+}
+
+.fullscreen-btn {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top, 0px));
+  right: max(10px, env(safe-area-inset-right, 0px));
+  z-index: 4500;
+  border: 1px solid rgba(212, 181, 106, 0.45);
+  border-radius: 4px;
+  background: rgba(12, 14, 18, 0.82);
+  color: var(--brass);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 8px 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.fullscreen-btn:active {
+  transform: scale(0.97);
+  filter: brightness(1.1);
+}
+
+/* Installed PWA / browser fullscreen: use the full visual viewport. */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  .fullscreen-btn {
+    display: none !important;
+  }
+
+  .poker-room {
+    height: 100dvh;
+    max-height: 100svh;
+    padding-top: max(4px, env(safe-area-inset-top, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+  }
+}
+
+html:fullscreen .fullscreen-btn,
+html:-webkit-full-screen .fullscreen-btn {
+  display: none !important;
+}
+
+html:fullscreen .poker-room,
+html:-webkit-full-screen .poker-room {
+  height: 100dvh;
+  max-height: 100svh;
 }

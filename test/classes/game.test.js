@@ -2,6 +2,15 @@ const Game = require('../../src/classes/game.js');
 const events = require('events');
 const { STARTING_CHIPS } = require('../../src/constants.js');
 
+// Deterministic seats for existing order-sensitive tests: always take the
+// lowest empty chair (Math.random → 0). Prefer-seat overrides still work.
+beforeAll(() => {
+  jest.spyOn(Math, 'random').mockReturnValue(0);
+});
+afterAll(() => {
+  Math.random.mockRestore();
+});
+
 test('Test call until fold then check', () => {
   const game = new Game('best-game', '1');
   game.smallBlind = 5;
@@ -907,7 +916,9 @@ test('Test all fold', () => {
   game.fold(currentPlayer.socket);
 
   expect(game.roundNum).toBe(1);
-  expect(game.roundData.bets.length).toBe(2);
+  // Hand awarded — table stakes cleared so ready-phase UI shows POT $0.
+  expect(game.roundData.bets.length).toBe(0);
+  expect(game.getCurrentPot()).toBe(0);
   expect(game.roundInProgress).toBe(false);
 
   expect(game.players.reduce((a, c) => a + c.money, 0)).toBe(
@@ -1489,4 +1500,130 @@ test('a folded player is excluded from the showdown and loses their wager', () =
   game.calculateMoney(0, players);
   expect(players[0].result).toBe(0); // folded gets nothing despite "stronger"
   expect(players[1].result).toBe(100); // live player sweeps the pot
+});
+
+test('only the best hand is marked winner — not players who get uncalled chips back', () => {
+  const game = new Game('winner-flag', '1');
+  const players = [
+    { live: true, invested: 50, handStrength: 2, result: -50, winner: false }, // pair
+    { live: true, invested: 100, handStrength: 1, result: -100, winner: false }, // high card, more chips
+  ];
+  game.calculateMoney(0, players);
+  expect(players[0].winner).toBe(true);
+  expect(players[1].winner).toBe(false); // uncalled $50 returned, but not a win
+  expect(players[0].result).toBe(50); // -50 + 100 pot
+  expect(players[1].result).toBe(-50); // -100 + 50 returned
+});
+
+test('pair beats high card: only the pair player is a showdown winner', () => {
+  const game = new Game('pair-vs-hc', '1');
+  game.smallBlind = 1;
+  game.bigBlind = 2;
+  const p1 = addMockPlayer(game, 1);
+  const p2 = addMockPlayer(game, 2);
+  p1.money = 4000;
+  p2.money = 4000;
+  p1.setStatus('');
+  p2.setStatus('');
+  // Board: 4c 9h Jh 3c 7d — p1 has Kd4h (pair of fours), p2 has 8sQs (queen high).
+  p1.cards = [
+    { getValue: () => 'K', getSuit: () => '♦' },
+    { getValue: () => 4, getSuit: () => '♥' },
+  ];
+  p2.cards = [
+    { getValue: () => 8, getSuit: () => '♠' },
+    { getValue: () => 'Q', getSuit: () => '♠' },
+  ];
+  game.community = [
+    { getValue: () => 4, getSuit: () => '♣' },
+    { getValue: () => 9, getSuit: () => '♥' },
+    { getValue: () => 'J', getSuit: () => '♥' },
+    { getValue: () => 3, getSuit: () => '♣' },
+    { getValue: () => 7, getSuit: () => '♦' },
+  ];
+  // Pretend both posted $2 into the pot this hand.
+  game.roundData.bets = [
+    [
+      { player: p1.getUsername(), bet: 2 },
+      { player: p2.getUsername(), bet: 2 },
+    ],
+  ];
+  game.foldPot = 0;
+
+  const roundResults = game.evaluateWinners();
+  expect(roundResults.winnerData.map((w) => w.player.getUsername())).toEqual([
+    p1.getUsername(),
+  ]);
+  expect(roundResults.playersData.map((pd) => pd.hand.name).sort()).toEqual([
+    'High Card',
+    'Pair',
+  ]);
+
+  const winningData = game.distributeMoney(roundResults);
+  const winners = winningData.filter((a) => a.winner);
+  expect(winners.map((w) => w.player.getUsername())).toEqual([p1.getUsername()]);
+  expect(winningData.find((w) => w.player === p2).winner).toBe(false);
+});
+// ── Fixed seats ─────────────────────────────────────────────────────────
+
+test('addPlayer assigns unique seatIndex values in 0..MAX_PLAYERS-1', () => {
+  const { MAX_PLAYERS } = require('../../src/constants.js');
+  const game = new Game('seats-unique', '1');
+  const seats = new Set();
+  for (let i = 0; i < MAX_PLAYERS; i++) {
+    const p = addMockPlayer(game, i + 1);
+    expect(p).toBeTruthy();
+    expect(p.getSeatIndex()).toBeGreaterThanOrEqual(0);
+    expect(p.getSeatIndex()).toBeLessThan(MAX_PLAYERS);
+    expect(seats.has(p.getSeatIndex())).toBe(false);
+    seats.add(p.getSeatIndex());
+  }
+  expect(game.addPlayer('overflow', new events.EventEmitter())).toBe(null);
+  expect(game.players.length).toBe(MAX_PLAYERS);
+});
+
+test('players stay sorted by seatIndex after joins', () => {
+  const game = new Game('seats-sort', '1');
+  const pA = game.addPlayer('A', Object.assign(new events.EventEmitter(), { id: 1 }), 7);
+  const pB = game.addPlayer('B', Object.assign(new events.EventEmitter(), { id: 2 }), 2);
+  const pC = game.addPlayer('C', Object.assign(new events.EventEmitter(), { id: 3 }), 5);
+  expect(game.players.map((p) => p.getUsername())).toEqual(['B', 'C', 'A']);
+  expect(game.players.map((p) => p.getSeatIndex())).toEqual([2, 5, 7]);
+  expect(pA.getSeatIndex()).toBe(7);
+  expect(pB.getSeatIndex()).toBe(2);
+  expect(pC.getSeatIndex()).toBe(5);
+});
+
+test('disconnect frees a seat that a new joiner can take', () => {
+  const game = new Game('seats-free', '1');
+  const p1 = game.addPlayer('1', Object.assign(new events.EventEmitter(), { id: 1 }), 3);
+  game.addPlayer('2', Object.assign(new events.EventEmitter(), { id: 2 }), 4);
+  game.disconnectPlayer(p1);
+  const p3 = game.addPlayer('3', Object.assign(new events.EventEmitter(), { id: 3 }), 3);
+  expect(p3.getSeatIndex()).toBe(3);
+});
+
+test('finalized reconnect prefers the previous seat when still free', () => {
+  const game = new Game('seats-rejoin', '1');
+  const p1 = game.addPlayer('1', Object.assign(new events.EventEmitter(), { id: 1 }), 6);
+  game.addPlayer('2', Object.assign(new events.EventEmitter(), { id: 2 }), 1);
+  game.disconnectPlayer(p1);
+  const s = Object.assign(new events.EventEmitter(), { id: 99 });
+  const rc = game.reconnectPlayer('1', s);
+  expect(rc.getSeatIndex()).toBe(6);
+});
+
+test('rerender payload includes seatIndex', () => {
+  const game = new Game('seats-payload', '1');
+  const s1 = Object.assign(new events.EventEmitter(), { id: 1 });
+  const s2 = Object.assign(new events.EventEmitter(), { id: 2 });
+  let payload = null;
+  s1.on('rerender', (data) => {
+    payload = data;
+  });
+  game.addPlayer('1', s1, 0);
+  game.addPlayer('2', s2, 1);
+  game.rerender();
+  expect(payload).toBeTruthy();
+  expect(payload.players.map((p) => p.seatIndex)).toEqual([0, 1]);
 });

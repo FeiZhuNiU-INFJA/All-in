@@ -8,12 +8,17 @@
 	<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,700;6..96,900&family=Figtree:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
 	<link href="css/materialize.min.css" type="text/css" rel="stylesheet" media="screen,projection" />
 	<link href="css/index.css" type="text/css" rel="stylesheet" media="screen,projection" />
+	<script src="https://unpkg.com/@lottiefiles/dotlottie-wc@0.8.5/dist/dotlottie-wc.js" type="module"></script>
 	<meta property="og:image" content="./img/pokerBanner.png" />
 	<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 	<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
 	<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
 	<link rel="manifest" href="/site.webmanifest">
-	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<meta name="mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+	<meta name="screen-orientation" content="landscape" />
 	<meta name="theme-color" content="#0a0c10">
 	<title>All-In</title>
 </head>
@@ -24,6 +29,15 @@
 		<div class="room-grain"></div>
 	</div>
 
+	<div id="rotateHint" class="rotate-hint" aria-live="polite">
+		<div class="rotate-hint-card">
+			<div class="rotate-hint-phone" aria-hidden="true"></div>
+			<p>请将手机横屏游玩</p>
+		</div>
+	</div>
+
+	<button type="button" id="fullscreenBtn" class="fullscreen-btn" hidden>全屏</button>
+
 	<div id="gameDiv" class="poker-room" style="display:none;">
 		<div class="table-hud">
 			<div id="table-title" class="table-hud-message"></div>
@@ -33,32 +47,24 @@
 			<div class="poker-table">
 				<div class="table-rail"></div>
 				<div class="table-felt">
+					<div id="countdown" class="felt-countdown"></div>
 					<div class="pot-area">
-						<span class="chip-icon chip-icon--pot" aria-hidden="true"></span>
 						<span class="pot-label">POT</span>
+						<dotlottie-wc
+							class="chip-lottie chip-lottie--pot"
+							src="./img/lottie-trial/chip-shuffle.lottie"
+							autoplay
+							loop
+							speed="0.85"
+							aria-hidden="true"
+						></dotlottie-wc>
 						<span id="potAmount" class="pot-amount">$0</span>
 					</div>
 					<div id="communityCards" class="community-cards"></div>
-					<div id="countdown" class="felt-countdown"></div>
 				</div>
+				<div id="opponentCards" class="seats-ring"></div>
 			</div>
-			<div id="opponentCards" class="seats-ring"></div>
-		</div>
-
-		<div class="hero-panel">
-			<div id="playerInformationCard" class="hero-seat">
-				<div class="hero-header">
-					<span id="usernamesCards" class="hero-name"></span>
-					<span id="blindStatus" class="hero-blind"></span>
-				</div>
-				<div id="mycards" class="hero-cards"></div>
-				<div class="hero-footer">
-					<span id="usernamesMoney" class="hero-stack">$0</span>
-					<span id="heroBet" class="seat-bet hero-bet" hidden></span>
-					<span id="status" class="hero-status"></span>
-				</div>
-			</div>
-			<div class="action-bar">
+			<div class="action-dock">
 				<div id="playNext" class="play-next-wrap"></div>
 				<div class="action-buttons">
 					<button onClick="fold()" id="usernameFold" class="action-btn action-fold">Fold</button>

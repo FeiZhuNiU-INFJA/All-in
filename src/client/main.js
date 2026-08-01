@@ -25,6 +25,110 @@ function closeLobbyModal() {
     });
 }
 
+function requestLandscape() {
+  try {
+    var orient = screen.orientation || screen.mozOrientation || screen.msOrientation;
+    if (orient && typeof orient.lock === 'function') {
+      orient.lock('landscape').catch(function () {});
+    } else if (typeof screen.lockOrientation === 'function') {
+      screen.lockOrientation('landscape');
+    } else if (typeof screen.mozLockOrientation === 'function') {
+      screen.mozLockOrientation('landscape');
+    } else if (typeof screen.msLockOrientation === 'function') {
+      screen.msLockOrientation('landscape');
+    }
+  } catch (e) {
+    // Browsers often deny lock outside fullscreen / installed PWA.
+  }
+}
+
+function isDisplayStandalone() {
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function isPageFullscreen() {
+  return !!(
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement
+  );
+}
+
+function canRequestFullscreen() {
+  var el = document.documentElement;
+  return !!(
+    el.requestFullscreen ||
+    el.webkitRequestFullscreen ||
+    el.webkitRequestFullScreen ||
+    el.msRequestFullscreen
+  );
+}
+
+function requestGameFullscreen() {
+  if (isDisplayStandalone() || isPageFullscreen()) {
+    requestLandscape();
+    return;
+  }
+  var el = document.documentElement;
+  var req =
+    el.requestFullscreen ||
+    el.webkitRequestFullscreen ||
+    el.webkitRequestFullScreen ||
+    el.msRequestFullscreen;
+  if (!req) {
+    requestLandscape();
+    updateFullscreenBtn();
+    return;
+  }
+  try {
+    var result = req.call(el, { navigationUI: 'hide' });
+    if (result && typeof result.then === 'function') {
+      result
+        .then(function () {
+          requestLandscape();
+          updateFullscreenBtn();
+        })
+        .catch(function () {
+          updateFullscreenBtn();
+        });
+    } else {
+      requestLandscape();
+      updateFullscreenBtn();
+    }
+  } catch (e) {
+    updateFullscreenBtn();
+  }
+}
+
+function updateFullscreenBtn() {
+  var $btn = $('#fullscreenBtn');
+  if (!$btn.length) return;
+  var show =
+    $('body').hasClass('in-game') &&
+    !isDisplayStandalone() &&
+    !isPageFullscreen() &&
+    canRequestFullscreen() &&
+    ('ontouchstart' in window || window.matchMedia('(max-width: 900px)').matches);
+  if (show) $btn.prop('hidden', false);
+  else $btn.prop('hidden', true);
+}
+
+function enterGameView() {
+  $('body').addClass('in-game');
+  requestGameFullscreen();
+  updateFullscreenBtn();
+}
+
+function leaveGameView() {
+  $('body').removeClass('in-game');
+  updateFullscreenBtn();
+}
+
 $(document).ready(function () {
   $('#gameDiv').hide();
 
@@ -55,6 +159,24 @@ $(document).ready(function () {
   $(document).on('keyup', function (e) {
     if (e.keyCode === 27) closeLobbyModal();
   });
+
+  $('#fullscreenBtn').on('click', function (e) {
+    e.preventDefault();
+    requestGameFullscreen();
+  });
+
+  // Orientation / fullscreen need a user gesture on most browsers.
+  $(document).on('click pointerdown', function () {
+    if ($('body').hasClass('in-game') && !isPageFullscreen() && !isDisplayStandalone()) {
+      // Soft retry only when already in-game; explicit button is the main path.
+      updateFullscreenBtn();
+    }
+  });
+
+  $(document).on(
+    'fullscreenchange webkitfullscreenchange mozfullscreenchange MSFullscreenChange',
+    updateFullscreenBtn
+  );
 
   if ($('.tooltipped').length) {
     $('.tooltipped').tooltip({ delay: 50 });
@@ -155,36 +277,152 @@ var lastActionSeq = 0; // last action sound played — de-dupe across rerenders
 var countdownInterval = null;
 var countdownKind = null;
 var countdownSecs = 0;
+var countdownLabel = '';
+var countdownTurnPlayer = null; // username whose seat shows the turn timer
+var lastReadyHint = '';
+// While hole/community cards are still flying in, hide own-turn chrome
+// and action buttons until the deal finishes.
+var dealLocked = false;
+var dealUnlockTimer = null;
+var pendingHeroTurn = false;
+var pendingTurnCountdown = null; // { username, deadlineMs }
 
-// Local countdown shown to players (turn timer / ready-up timer). The server
-// remains the source of truth for the actual timeout; this is just a display.
+function lockActionsForDeal(durationMs) {
+  if (durationMs <= 0) return;
+  dealLocked = true;
+  hideAllActionBtns();
+  $('#gameDiv').addClass('is-dealing');
+  $('#playerInformationCard').removeClass('seat-active');
+  $('#status').text('');
+  // Hide turn timer while cards are still dealing.
+  if (countdownKind === 'turn') clearCountdown();
+  clearTimeout(dealUnlockTimer);
+  dealUnlockTimer = setTimeout(finishDealLock, durationMs);
+}
+
+function finishDealLock() {
+  dealLocked = false;
+  $('#gameDiv').removeClass('is-dealing');
+  if (pendingTurnCountdown) {
+    var left = Math.max(
+      1,
+      Math.ceil((pendingTurnCountdown.deadlineMs - Date.now()) / 1000)
+    );
+    startCountdown('turn', left, '', pendingTurnCountdown.username);
+    pendingTurnCountdown = null;
+  }
+  if (pendingHeroTurn) {
+    pendingHeroTurn = false;
+    revealHeroTurn();
+  }
+}
+
+function revealHeroTurn() {
+  if (dealLocked || $('#gameDiv').hasClass('is-dealing')) {
+    pendingHeroTurn = true;
+    return;
+  }
+  var $hero = $('#playerInformationCard');
+  $hero.addClass('seat-active');
+  $('#status').text('');
+  // Thinking chip (no amount) if this street has no bet yet.
+  if ($('#heroBet').prop('hidden') || !$('#heroBet').text()) {
+    $('#heroBet')
+      .html(chipLottieHtml())
+      .prop('hidden', false)
+      .addClass('seat-thinking-chip');
+  }
+  socket.emit('evaluatePossibleMoves', {});
+}
+
+// Local countdown: ready-up text on the felt; turn timer on the acting seat.
 function clearCountdown() {
   if (countdownInterval) {
     clearInterval(countdownInterval);
     countdownInterval = null;
   }
   countdownKind = null;
-  $('#countdown').empty();
+  countdownLabel = '';
+  countdownTurnPlayer = null;
+  $('#countdown').empty().removeClass('is-turn');
+  $('.seat-turn-timer').remove();
 }
 
-function startCountdown(kind, secs, label) {
+function paintSeatTurnTimer() {
+  if (countdownKind !== 'turn' || !countdownTurnPlayer || countdownSecs <= 0) {
+    $('.seat-turn-timer').remove();
+    return;
+  }
+  var name = countdownTurnPlayer;
+  var $seat =
+    name === myUsername
+      ? $('#playerInformationCard')
+      : $('#opponentCards .table-seat').filter(function () {
+          return $(this).attr('data-name') === name;
+        });
+  var $name = $seat.find('.seat-name').first();
+  if (!$name.length) {
+    $('.seat-turn-timer').remove();
+    return;
+  }
+  var label = countdownSecs + 's';
+  // Update in place — recreating the span every second restarts CSS
+  // animation and desyncs from the seat name / cards / chip pulse.
+  var $timer = $name.find('.seat-turn-timer').first();
+  if ($timer.length) {
+    $timer.text(label);
+    $('.seat-turn-timer').not($timer).remove();
+    return;
+  }
+  $('.seat-turn-timer').remove();
+  $name.prepend(
+    '<span class="seat-turn-timer" aria-hidden="true">' + label + '</span>'
+  );
+}
+
+function paintCountdown() {
+  if (!countdownKind) {
+    $('#countdown').empty().removeClass('is-turn');
+    $('.seat-turn-timer').remove();
+    return;
+  }
+  if (countdownKind === 'turn') {
+    // Turn clock lives on the acting player's name, not the felt.
+    $('#countdown').empty().removeClass('is-turn');
+    paintSeatTurnTimer();
+    return;
+  }
+  var text = countdownLabel || '';
+  if (countdownSecs > 0) {
+    text = text ? text + ' ' + countdownSecs + 's' : countdownSecs + 's';
+  }
+  $('#countdown').text(text).removeClass('is-turn');
+}
+
+function updateCountdownLabel(label) {
+  countdownLabel = label || '';
+  if (countdownKind === 'turn') return;
+  if (countdownKind) paintCountdown();
+  else if (countdownLabel) $('#countdown').text(countdownLabel);
+}
+
+function startCountdown(kind, secs, label, turnPlayer) {
   if (countdownInterval) {
     clearInterval(countdownInterval);
     countdownInterval = null;
   }
   countdownKind = kind;
   countdownSecs = secs;
-  var render = function () {
-    $('#countdown').text(label + ' ' + countdownSecs + 's');
-  };
-  render();
+  countdownLabel = label || '';
+  countdownTurnPlayer = kind === 'turn' ? turnPlayer || null : null;
+  paintCountdown();
   countdownInterval = setInterval(function () {
     countdownSecs -= 1;
     if (countdownSecs <= 0) {
       clearCountdown();
       return;
     }
-    render();
+    paintCountdown();
   }, 1000);
 }
 
@@ -407,75 +645,212 @@ function renderCardWithAnim(card, delaySec) {
   );
 }
 
-/* Seat positions around the oval table (top %, left %) */
-var SEAT_LAYOUTS = [
-  [],
-  [{ top: '2%', left: '50%' }],
-  [
-    { top: '4%', left: '28%' },
-    { top: '4%', left: '72%' },
-  ],
-  [
-    { top: '2%', left: '50%' },
-    { top: '28%', left: '12%' },
-    { top: '28%', left: '88%' },
-  ],
-  [
-    { top: '2%', left: '26%' },
-    { top: '2%', left: '74%' },
-    { top: '42%', left: '6%' },
-    { top: '42%', left: '94%' },
-  ],
-  [
-    { top: '2%', left: '50%' },
-    { top: '10%', left: '18%' },
-    { top: '10%', left: '82%' },
-    { top: '42%', left: '6%' },
-    { top: '42%', left: '94%' },
-  ],
-  [
-    { top: '2%', left: '50%' },
-    { top: '10%', left: '20%' },
-    { top: '10%', left: '80%' },
-    { top: '40%', left: '6%' },
-    { top: '40%', left: '94%' },
-    { top: '58%', left: '50%' },
-  ],
-  [
-    { top: '2%', left: '36%' },
-    { top: '2%', left: '64%' },
-    { top: '22%', left: '10%' },
-    { top: '22%', left: '90%' },
-    { top: '42%', left: '6%' },
-    { top: '42%', left: '94%' },
-    { top: '58%', left: '50%' },
-  ],
-  [
-    { top: '2%', left: '32%' },
-    { top: '2%', left: '50%' },
-    { top: '2%', left: '68%' },
-    { top: '24%', left: '8%' },
-    { top: '24%', left: '92%' },
-    { top: '42%', left: '6%' },
-    { top: '42%', left: '94%' },
-    { top: '58%', left: '50%' },
-  ],
-  [
-    { top: '2%', left: '28%' },
-    { top: '2%', left: '50%' },
-    { top: '2%', left: '72%' },
-    { top: '20%', left: '8%' },
-    { top: '20%', left: '92%' },
-    { top: '40%', left: '5%' },
-    { top: '40%', left: '95%' },
-    { top: '56%', left: '28%' },
-    { top: '56%', left: '72%' },
-  ],
+// Lottie chip glyph for pot / seat bets.
+function chipLottieHtml(extraClass) {
+  return (
+    '<dotlottie-wc class="chip-lottie' +
+    (extraClass ? ' ' + extraClass : '') +
+    '" src="./img/lottie-trial/chip-shuffle.lottie" autoplay loop speed="0.9" aria-hidden="true"></dotlottie-wc>'
+  );
+}
+
+/* Fixed absolute seats on the oval. visualIndex 0 = south (hero on the ring).
+ * Indices 1..9 go clockwise from the hero's left.
+ * Percentages are relative to .poker-table (seats-ring is inside it). */
+var MAX_TABLE_SEATS = 10;
+var FIXED_SEAT_POSITIONS = [
+  { top: '88%', left: '50%' }, // 0 — hero (bottom of table)
+  { top: '76%', left: '16%' }, // 1 lower-left
+  { top: '50%', left: '6%' }, // 2 mid-left
+  { top: '22%', left: '12%' }, // 3 upper-left
+  { top: '4%', left: '28%' }, // 4 top-left
+  { top: '0%', left: '50%' }, // 5 top center
+  { top: '4%', left: '72%' }, // 6 top-right
+  { top: '22%', left: '88%' }, // 7 upper-right
+  { top: '50%', left: '94%' }, // 8 mid-right
+  { top: '76%', left: '84%' }, // 9 lower-right
 ];
 
-function opponentSeatStyles(count) {
-  var idx = Math.min(Math.max(count, 1), SEAT_LAYOUTS.length - 1);
-  return SEAT_LAYOUTS[idx];
+// Local player's hole cards — painted on the table seat (same ring as others).
+var myHoleCards = [];
+
+/** Fill in missing seatIndex values so older payloads still render. */
+function ensureSeatIndexes(players) {
+  var list = (players || []).map(function (p) {
+    return Object.assign({}, p);
+  });
+  var taken = {};
+  list.forEach(function (p) {
+    if (p.seatIndex != null && p.seatIndex >= 0) taken[p.seatIndex] = true;
+  });
+  var next = 0;
+  list.forEach(function (p) {
+    if (p.seatIndex != null && p.seatIndex >= 0) return;
+    while (taken[next]) next++;
+    p.seatIndex = next;
+    taken[next] = true;
+    next++;
+  });
+  return list;
+}
+
+function findMySeatIndex(players, username) {
+  if (!players) return 0;
+  for (var i = 0; i < players.length; i++) {
+    if (players[i].username === username && players[i].seatIndex != null) {
+      return players[i].seatIndex;
+    }
+  }
+  return 0;
+}
+
+function visualSeatIndex(seatIndex, mySeatIndex) {
+  return (seatIndex - mySeatIndex + MAX_TABLE_SEATS) % MAX_TABLE_SEATS;
+}
+
+function renderEmptySeat(style) {
+  var topPct = style && style.top != null ? parseFloat(style.top) : 50;
+  var edgeClass = topPct <= 16 ? ' seat-edge-top' : '';
+  if (topPct >= 90) edgeClass = ' seat-edge-bottom';
+  return (
+    '<div class="table-seat seat-empty' +
+    edgeClass +
+    '" style="top:' +
+    style.top +
+    ';left:' +
+    style.left +
+    '" aria-hidden="true"></div>'
+  );
+}
+
+/** Hero seat on the felt — same ring as opponents, face-up hole cards. */
+function renderHeroSeat(name, data, style) {
+  var bet = getPlayerBet(name, data.bets);
+  var stateClass = seatStateClass(data.text);
+  if (data.text === 'Their Turn') stateClass = 'seat-active';
+  var nameHtml = name + shameCoinsHtml(data.buyIns);
+  var dealerBadge = data.dealer
+    ? '<span class="seat-dealer" title="庄家">D</span>'
+    : '';
+  var blindBadge =
+    '<span class="seat-blind" id="blindStatus">' +
+    (data.blind ? abbrevBlind(data.blind) : '') +
+    '</span>';
+  var cardsHtml = '';
+  if (data.text === 'Spectating') {
+    cardsHtml = '';
+  } else if (myHoleCards && myHoleCards.length) {
+    cardsHtml = myHoleCards
+      .map(function (c, i) {
+        return data.animateHole
+          ? renderCardWithAnim(c, i * 0.6)
+          : renderCard(c);
+      })
+      .join('');
+  } else {
+    cardsHtml = '<div class="blankCard"></div><div class="blankCard"></div>';
+  }
+  var betHtml = '';
+  if (bet > 0) {
+    betHtml =
+      '<div id="heroBet" class="seat-bet">' +
+      chipLottieHtml() +
+      '$' +
+      bet +
+      '</div>';
+  } else if (data.text === 'Their Turn') {
+    betHtml =
+      '<div id="heroBet" class="seat-bet seat-thinking-chip" aria-hidden="true">' +
+      chipLottieHtml() +
+      '</div>';
+  } else {
+    betHtml = '<div id="heroBet" class="seat-bet" hidden></div>';
+  }
+  var statusText = '';
+  if (data.roundInProgress === false) {
+    // Between hands: only ready-up choice, not leftover hand labels.
+    if (data.money > 0 && data.readyState === 'ready') statusText = '已准备';
+    else if (data.money > 0 && data.readyState === 'watching') statusText = '旁观';
+  } else if (data.text === 'Fold') statusText = '弃牌';
+  else if (data.text === 'Their Turn') statusText = '';
+  else if (data.isChecked) statusText = 'Check';
+  else if (data.text === 'Spectating') statusText = '旁观';
+  else if (data.text === 'Reconnecting') statusText = '重连中…';
+  var handHtml = data.endHand
+    ? '<div class="seat-hand">' + data.endHand + '</div>'
+    : '';
+  return (
+    '<div id="playerInformationCard" class="table-seat seat-hero ' +
+    stateClass +
+    ' seat-edge-bottom" data-name="' +
+    name +
+    '" style="top:' +
+    style.top +
+    ';left:' +
+    style.left +
+    '">' +
+    '<div class="seat-cards" id="mycards">' +
+    cardsHtml +
+    '</div>' +
+    '<div class="seat-hero-side">' +
+    '<div class="seat-head">' +
+    dealerBadge +
+    blindBadge +
+    '<div class="seat-name" id="usernamesCards">' +
+    nameHtml +
+    '</div>' +
+    '</div>' +
+    '<div class="seat-meta">' +
+    '<div class="seat-stack" id="usernamesMoney">$' +
+    data.money +
+    '</div>' +
+    betHtml +
+    '<div class="seat-status hero-status" id="status">' +
+    (data.text === 'Their Turn' ? '' : statusText) +
+    '</div>' +
+    '</div>' +
+    handHtml +
+    '</div>' +
+    '</div>'
+  );
+}
+
+/** Render all fixed ring seats relative to the local player's seat. */
+function renderTableRing(players, myUsername, seatDataFn) {
+  var seated = ensureSeatIndexes(players);
+  var bySeat = {};
+  seated.forEach(function (p) {
+    bySeat[p.seatIndex] = p;
+  });
+  var mySeat = findMySeatIndex(seated, myUsername);
+  var html = '';
+  for (var abs = 0; abs < MAX_TABLE_SEATS; abs++) {
+    var vis = visualSeatIndex(abs, mySeat);
+    var style = FIXED_SEAT_POSITIONS[vis];
+    var p = bySeat[abs];
+    if (vis === 0) {
+      var me =
+        p && p.username === myUsername
+          ? p
+          : seated.filter(function (x) {
+              return x.username === myUsername;
+            })[0] || {
+              username: myUsername,
+              seatIndex: mySeat,
+              money: 0,
+            };
+      var heroData = seatDataFn(me);
+      heroData.animateHole = !!pendingDealAnim;
+      html += renderHeroSeat(me.username || myUsername, heroData, style);
+      continue;
+    }
+    if (p && p.username !== myUsername) {
+      html += renderSeat(p.username, seatDataFn(p), style);
+    } else {
+      html += renderEmptySeat(style);
+    }
+  }
+  return html;
 }
 
 function getPlayerBet(name, bets) {
@@ -667,16 +1042,9 @@ socket.on('joinRoom', function (data) {
 
 socket.on('dealt', function (data) {
   myUsername = data.username;
-  $('#mycards').html(
-    data.cards.map(function (c, i) {
-      // Hole cards: ~0.6s apart; sound when each LANDS (deal delay + 0.5s flight).
-      setTimeout(playDealSound, 500 + i * 600);
-      return renderCardWithAnim(c, i * 0.6);
-    })
-  );
+  myHoleCards = data.cards || [];
   lastCommunityCount = 0; // new hand: community is empty again
-  pendingDealAnim = true; // opponents' face-down cards animate on the next rerender
-  $('#usernamesCards').html(data.username + shameCoinsHtml(0));
+  pendingDealAnim = true; // hole + opponents animate on the next rerender
   $('#mainContent').remove();
 });
 
@@ -701,17 +1069,10 @@ socket.on('rerender', function (data) {
   $('.action-popup').remove();
   // A new hand is starting — clear last hand's winner highlight.
   $('.seat-winner').removeClass('seat-winner');
-  var nameLabel = data.username + shameCoinsHtml(data.buyIns);
-  $('#usernamesCards').html(nameLabel);
-  if (data.myBet > 0) {
-    $('#heroBet')
-      .html('<span class="chip-icon" aria-hidden="true"></span>$' + data.myBet)
-      .prop('hidden', false);
-  } else {
-    $('#heroBet').html('').prop('hidden', true);
-  }
+  $('.seat-winner-badge').remove();
   if (data.community != undefined) {
     var prevCommunity = skipNextDealAnim ? data.community.length : lastCommunityCount;
+    var newCommunity = Math.max(0, data.community.length - prevCommunity);
     $('#communityCards').html(
       data.community.map(function (c, i) {
         if (i >= prevCommunity) {
@@ -723,6 +1084,12 @@ socket.on('rerender', function (data) {
         return renderCard(c);
       })
     );
+    if (newCommunity > 0 && !skipNextDealAnim) {
+      // Last new card: delay 1s + (n-1)*1s, flight 0.5s. Extra buffer so the
+      // turn chrome never pops before the final card has settled.
+      var communityDealMs = (1.0 + (newCommunity - 1) * 1.0 + 0.5) * 1000 + 250;
+      lockActionsForDeal(communityDealMs);
+    }
     lastCommunityCount = data.community.length;
     skipNextDealAnim = false;
   } else {
@@ -730,12 +1097,11 @@ socket.on('rerender', function (data) {
     lastCommunityCount = 0;
   }
   if (data.currBet == undefined) data.currBet = 0;
-  $('#potAmount').text('$' + data.pot);
+  $('#potAmount').text('$' + (data.roundInProgress ? data.pot : 0));
   $('#table-title').text('');
-  var styles = opponentSeatStyles(data.players.length);
   $('#opponentCards').html(
-    data.players.map(function (p, i) {
-      return renderSeat(p.username, {
+    renderTableRing(data.players, data.username, function (p) {
+      return {
         text: p.status,
         money: p.money,
         blind: p.blind,
@@ -745,16 +1111,25 @@ socket.on('rerender', function (data) {
         isChecked: p.isChecked,
         readyState: p.readyState,
         roundInProgress: data.roundInProgress,
-      }, styles[i] || styles[0]);
-    }).join('')
+      };
+    })
   );
   if (pendingDealAnim) {
-    // A new hand was just dealt — fly opponents' face-down cards in too.
-    var $dealtSeats = $('#opponentCards .blankCard');
+    // Hole cards already have deal-in from renderHeroSeat; also fly opponents'.
+    $('#opponentCards .seat-hero .deal-in').each(function (i) {
+      // Sound when each hole card LANDS (delay + 0.5s flight).
+      var delay = parseFloat(this.style.animationDelay) || i * 0.6;
+      setTimeout(playDealSound, (delay + 0.5) * 1000);
+    });
+    var $dealtSeats = $('#opponentCards .table-seat:not(.seat-hero) .blankCard');
     $dealtSeats.addClass('deal-in');
     $dealtSeats.each(function (i) {
       this.style.animationDelay = i * 0.5 + 's';
     });
+    var blankCount = $dealtSeats.length;
+    var holeDealMs = 0.6 + 0.5; // seconds
+    var blankDealMs = blankCount > 0 ? (blankCount - 1) * 0.5 + 0.5 : 0;
+    lockActionsForDeal(Math.max(holeDealMs, blankDealMs) * 1000 + 250);
     pendingDealAnim = false;
   }
   renderSelf({
@@ -774,15 +1149,30 @@ socket.on('rerender', function (data) {
   });
   // Countdown: during a hand show the acting player's turn timer; the ready-up
   // timer is started by reveal/endHand and cleared when the next hand begins.
+  // While cards are dealing, defer the seat turn timer until the deal finishes.
   if (data.roundInProgress) {
     if (countdownKind === 'ready') clearCountdown();
     var turnPlayer = (data.players || []).filter(function (p) {
       return p.status === 'Their Turn';
     })[0];
-    if (turnPlayer) startCountdown('turn', 120, turnPlayer.username + ' 思考中...');
-    else if (countdownKind === 'turn') clearCountdown();
-  } else if (countdownKind === 'turn') {
-    clearCountdown();
+    if (turnPlayer) {
+      if (dealLocked) {
+        pendingTurnCountdown = {
+          username: turnPlayer.username,
+          deadlineMs: Date.now() + 120000,
+        };
+        clearCountdown();
+      } else {
+        pendingTurnCountdown = null;
+        startCountdown('turn', 120, '', turnPlayer.username);
+      }
+    } else {
+      pendingTurnCountdown = null;
+      if (countdownKind === 'turn') clearCountdown();
+    }
+  } else {
+    pendingTurnCountdown = null;
+    if (countdownKind === 'turn') clearCountdown();
   }
 });
 
@@ -794,6 +1184,7 @@ socket.on('gameBegin', function (data) {
   }
   $('#mainContent').hide();
   $('#gameDiv').css('display', 'flex');
+  enterGameView();
   skipNextDealAnim = true; // late join / game start: don't replay the deal animation
 });
 
@@ -803,8 +1194,9 @@ function chooseReady(choice) {
 
 // Between hands, render the ready-up controls (Ready / Watch) for the local
 // player plus a waiting hint derived from everyone's readyState. This replaces
-// the old single "Start Next Hand" button: the next hand now begins
-// automatically server-side once every funded player has chosen and >= 2 are ready.
+// Between hands the action dock only shows ready/watch buttons. Status text
+// like "等待至少 2 人准备好" lives on the felt countdown. Turn timers sit
+// in front of the acting player's name instead.
 function renderReadyPhase(opts) {
   var $wrap = $('#playNext');
   $wrap.empty();
@@ -824,9 +1216,12 @@ function renderReadyPhase(opts) {
   if (ready < 2) hint = '等待至少 2 人准备好（当前 ' + ready + ' 人已准备）…';
   else if (undecided > 0) hint = '等待 ' + undecided + ' 位玩家选择…';
   else hint = '即将开始…';
+  lastReadyHint = hint;
+  // Same felt slot as turn "思考中" — keep the ready timer if it's running.
+  if (countdownKind === 'ready') updateCountdownLabel(hint);
+  else if (countdownKind !== 'turn') updateCountdownLabel(hint);
 
-  var html =
-    '<div class="ready-phase"><div class="ready-phase-hint">' + hint + '</div>';
+  var html = '<div class="ready-phase">';
   if (opts.myReadyState === 'ready') {
     html +=
       '<button class="action-btn action-on ready-btn" disabled>✓ 已准备好</button>';
@@ -851,14 +1246,18 @@ socket.on('reveal', function (data) {
   hideAllActionBtns();
 
   var winners = parseWinners(data.winners);
-  $('#table-title').text('Winner: ' + winners.join(', '));
-  $('#blindStatus').text(data.hand);
+  $('#table-title').text('');
   $('#usernamesMoney').text('$' + data.money);
   maybeShowRebuyPrompt(data.money, false);
-  var styles = opponentSeatStyles(data.cards.length);
+  var meReveal = (data.cards || []).filter(function (p) {
+    return p.username === data.username;
+  })[0];
+  if (meReveal && meReveal.cards && meReveal.cards.length) {
+    myHoleCards = meReveal.cards;
+  }
   $('#opponentCards').html(
-    data.cards.map(function (p, i) {
-      return renderSeat(p.username, {
+    renderTableRing(data.cards, data.username, function (p) {
+      return {
         text: p.folded ? 'Fold' : '',
         money: p.money,
         blind: '',
@@ -866,11 +1265,12 @@ socket.on('reveal', function (data) {
         buyIns: p.buyIns,
         cards: p.cards,
         showCards: !p.folded,
-        endHand: p.hand,
+        // Showdown rank (e.g. "Pair, A's") — not Fold / ready labels.
+        endHand: !p.folded && p.hand ? p.hand : '',
         readyState: p.readyState,
         roundInProgress: false,
-      }, styles[i] || styles[0]);
-    }).join('')
+      };
+    })
   );
   renderReadyPhase({
     roundInProgress: false,
@@ -878,16 +1278,20 @@ socket.on('reveal', function (data) {
     myReadyState: data.myReadyState,
     players: data.cards,
   });
-  startCountdown('ready', 120, '准备/旁观');
-  highlightWinners(winners, data.username);
+  startCountdown('ready', 120, lastReadyHint || '准备/旁观');
+  highlightWinners(winners, data.username, 'Winner');
   setTimeout(function () {
     animateChipsToWinners(winners, data.username);
+    // Pot already paid out — clear after the fly-to-winner animation starts.
+    setTimeout(function () {
+      $('#potAmount').text('$0');
+    }, 700);
   }, 500);
 });
 
 socket.on('endHand', function (data) {
   hideAllActionBtns();
-  $('#table-title').text(data.winner + ' wins $' + data.pot);
+  $('#table-title').text('');
   $('#potAmount').text('$' + data.pot);
   $('#blindStatus').text('');
   if (data.folded == 'Fold') {
@@ -899,18 +1303,17 @@ socket.on('endHand', function (data) {
   }
   $('#usernamesMoney').text('$' + data.money);
   maybeShowRebuyPrompt(data.money, false);
-  var styles = opponentSeatStyles(data.cards.length);
   $('#opponentCards').html(
-    data.cards.map(function (p, i) {
-      return renderSeat(p.username, {
+    renderTableRing(data.cards, data.username, function (p) {
+      return {
         text: p.text,
         money: p.money,
         blind: '',
         bets: data.bets,
         readyState: p.readyState,
         roundInProgress: false,
-      }, styles[i] || styles[0]);
-    }).join('')
+      };
+    })
   );
   renderReadyPhase({
     roundInProgress: false,
@@ -918,10 +1321,13 @@ socket.on('endHand', function (data) {
     myReadyState: data.myReadyState,
     players: data.cards,
   });
-  startCountdown('ready', 120, '准备/旁观');
-  highlightWinners([data.winner], data.username);
+  startCountdown('ready', 120, lastReadyHint || '准备/旁观');
+  highlightWinners([data.winner], data.username, 'Wins $' + data.pot);
   setTimeout(function () {
     animateChipsToWinners([data.winner], data.username);
+    setTimeout(function () {
+      $('#potAmount').text('$0');
+    }, 700);
   }, 400);
 });
 
@@ -930,6 +1336,7 @@ var beginHost = function () {
     return;
   } else {
     myUsername = $('#hostName-field').val();
+    requestGameFullscreen();
     socket.emit('host', { username: myUsername });
     $('#joinButton').addClass('disabled');
     $('#joinButton').off('click');
@@ -946,6 +1353,7 @@ var joinRoom = function () {
     return;
   } else {
     myUsername = $('#joinName-field').val();
+    requestGameFullscreen();
     socket.emit('join', {
       code: String($('#code-field').val()).trim(),
       username: myUsername,
@@ -963,6 +1371,7 @@ var startGame = function (gameCode) {
   if (!code) {
     return;
   }
+  requestGameFullscreen();
   socket.emit('startGame', { code: code });
 };
 
@@ -1093,11 +1502,19 @@ function getWinnerEl(name, myName) {
 }
 
 // Highlight every winner's seat (handles split pots with multiple winners).
-function highlightWinners(winners, myName) {
+// label: optional badge text above the seat (e.g. "Winner", "Wins $4").
+function highlightWinners(winners, myName, label) {
   $('.seat-winner').removeClass('seat-winner');
+  $('.seat-winner-badge').remove();
+  var badge = label || 'Winner';
   winners.forEach(function (w) {
     var $el = getWinnerEl(w, myName);
-    if ($el && $el.length) $el.addClass('seat-winner');
+    if ($el && $el.length) {
+      $el.addClass('seat-winner');
+      $el.append(
+        '<div class="seat-winner-badge">' + badge + '</div>'
+      );
+    }
   });
 }
 
@@ -1149,38 +1566,46 @@ function renderSeat(name, data, style) {
     ? '<span class="seat-blind">' + abbrevBlind(data.blind) + '</span>'
     : '';
   var cardsHtml;
-  if (data.text === 'Spectating' || data.endHand === 'Spectating') {
-    // 旁观者这手不参与，不显示牌位
+  var betweenHands = data.roundInProgress === false;
+  if (
+    !betweenHands &&
+    (data.text === 'Spectating' || data.endHand === 'Spectating')
+  ) {
+    // Mid-hand spectator: no hole cards.
     cardsHtml = '';
   } else if (data.showCards && data.cards && data.cards.length) {
     cardsHtml =
       renderOpponentCard(data.cards[0]) + renderOpponentCard(data.cards[1]);
+  } else if (betweenHands) {
+    // Between hands don't keep stale backs from the last deal.
+    cardsHtml = '';
   } else {
     cardsHtml = '<div class="blankCard"></div><div class="blankCard"></div>';
   }
   var betHtml =
     bet > 0
-      ? '<div class="seat-bet"><span class="chip-icon" aria-hidden="true"></span>$' + bet + '</div>'
-      : '';
+      ? '<div class="seat-bet">' + chipLottieHtml() + '$' + bet + '</div>'
+      : data.text === 'Their Turn'
+        ? '<div class="seat-bet seat-thinking-chip" aria-hidden="true">' +
+          chipLottieHtml() +
+          '</div>'
+        : '';
   var statusHtml = '';
-  if (data.text === 'Fold') statusHtml = '<div class="seat-status">Fold</div>';
-  else if (data.isChecked) statusHtml = '<div class="seat-status">Check</div>';
-  else if (data.text === 'Spectating')
-    statusHtml = '<div class="seat-status">Spectating</div>';
-  else if (data.text === 'Reconnecting')
+  if (betweenHands) {
+    // Ready phase: only show 已准备 / 旁观 — never stack with last hand's status.
+    if (data.money > 0 && data.readyState === 'ready') {
+      statusHtml = '<div class="seat-status seat-ready">已准备</div>';
+    } else if (data.money > 0 && data.readyState === 'watching') {
+      statusHtml = '<div class="seat-status seat-watching">旁观</div>';
+    }
+  } else if (data.text === 'Fold') {
+    statusHtml = '<div class="seat-status">弃牌</div>';
+  } else if (data.isChecked) {
+    statusHtml = '<div class="seat-status">Check</div>';
+  } else if (data.text === 'Spectating') {
+    statusHtml = '<div class="seat-status">旁观</div>';
+  } else if (data.text === 'Reconnecting') {
     statusHtml = '<div class="seat-status seat-reconnecting-label">重连中…</div>';
-  // Between hands, show each funded player's ready-up choice on their seat.
-  if (
-    data.roundInProgress === false &&
-    data.money > 0 &&
-    (data.readyState === 'ready' || data.readyState === 'watching')
-  ) {
-    statusHtml +=
-      '<div class="seat-status seat-' +
-      data.readyState +
-      '">' +
-      (data.readyState === 'ready' ? 'Ready' : 'Watching') +
-      '</div>';
   }
   var handHtml = data.endHand
     ? '<div class="seat-hand">' + data.endHand + '</div>'
@@ -1289,6 +1714,11 @@ function updateRaiseModal() {
 }
 
 socket.on('displayPossibleMoves', function (data) {
+  if (dealLocked) {
+    // Deal animation still running — buttons wait until revealHeroTurn.
+    hideAllActionBtns();
+    return;
+  }
   if (data.fold == 'yes') showActionBtn('#usernameFold');
   else hideActionBtn('#usernameFold');
   if (data.check == 'yes') showActionBtn('#usernameCheck');
@@ -1308,20 +1738,29 @@ socket.on('displayPossibleMoves', function (data) {
 
 function renderSelf(data) {
   $('#playNext').empty();
-  $('#usernamesMoney').text('$' + data.money);
   var $hero = $('#playerInformationCard');
+  if (!$hero.length) return;
+  $('#usernamesMoney').text('$' + data.money);
   $hero.removeClass('seat-active seat-folded');
   if (data.text == 'Their Turn') {
-    $hero.addClass('seat-active');
-    $('#status').text('Your Turn');
-    socket.emit('evaluatePossibleMoves', {});
+    if (dealLocked || $('#gameDiv').hasClass('is-dealing')) {
+      pendingHeroTurn = true;
+      $('#status').text('');
+      hideAllActionBtns();
+    } else {
+      pendingHeroTurn = false;
+      revealHeroTurn();
+    }
   } else if (data.text == 'Fold') {
+    pendingHeroTurn = false;
     $hero.addClass('seat-folded');
     $('#status').text('Folded');
     hideAllActionBtns();
   } else {
+    pendingHeroTurn = false;
     $('#status').text('');
     hideAllActionBtns();
   }
-  $('#blindStatus').text(abbrevBlind(data.blind));
+  if (data.blind) $('#blindStatus').text(abbrevBlind(data.blind));
+  else $('#blindStatus').text('');
 }

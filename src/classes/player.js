@@ -16,6 +16,8 @@ const Player = function (playerName, socket, debug) {
   // Ready-up state between hands: 'undecided' | 'ready' | 'watching'.
   // 'watching' persists across hands; 'ready' resets to 'undecided' each hand.
   this.readyState = 'undecided';
+  // Absolute table seat 0..MAX_PLAYERS-1; assigned on join.
+  this.seatIndex = null;
   this.debug = debug || false;
 
   this.addCard = (card) => {
@@ -52,6 +54,12 @@ const Player = function (playerName, socket, debug) {
   };
   this.getReadyState = () => {
     return this.readyState;
+  };
+  this.getSeatIndex = () => {
+    return this.seatIndex;
+  };
+  this.setSeatIndex = (i) => {
+    this.seatIndex = i;
   };
 
   this.emit = (eventName, payload) => {

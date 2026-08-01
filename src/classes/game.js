@@ -2,7 +2,7 @@
 const Deck = require('./deck.js');
 const Player = require('./player.js');
 const Hand = require('pokersolver').Hand;
-const { STARTING_CHIPS } = require('../constants.js');
+const { STARTING_CHIPS, MAX_PLAYERS } = require('../constants.js');
 
 const Game = function (name, host) {
   this.deck = new Deck();
@@ -278,6 +278,7 @@ const Game = function (name, host) {
   };
 
   this.rerender = () => {
+    this.ensurePlayerSeats();
     let playersData = [];
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
       playersData.push({
@@ -292,6 +293,7 @@ const Game = function (name, host) {
         isChecked: this.playerIsChecked(this.players[pn]),
         readyState: this.players[pn].getReadyState(),
         reconnecting: !!this.players[pn].pendingDisconnect,
+        seatIndex: this.players[pn].getSeatIndex(),
       });
     }
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
@@ -624,6 +626,8 @@ const Game = function (name, host) {
       );
       for (p of winners) {
         p.result += winnerPot / winners.length;
+        // Only pot awards count as "winner" — not uncalled-bet returns below.
+        if (winnerPot > 0) p.winner = true;
       }
       playerInvestments = playerInvestments.filter((p) => p.invested > 0);
       winnerPot = 0;
@@ -631,19 +635,23 @@ const Game = function (name, host) {
 
     if (playerInvestments.length === 1) {
       let p = playerInvestments[0];
+      // Leftover chips / uncalled bet — money comes back, but this is not a win.
       p.result += winnerPot + p.invested;
     }
   };
 
   this.distributeMoney = (result) => {
     let playerInvestments = this.players.map((p) => {
-      const winData = result.winnerData.find((w) => w.player === p);
+      // Every live player needs a real hand rank for side pots. Using only
+      // winnerData left losers at -1; if matching failed, EVERYONE was -1 and
+      // the pot was split — hence multiple "Winner" badges on a clear beat.
+      const playerHand = (result.playersData || []).find((pd) => pd.player === p);
       const invested = this.getTotalInvested(p);
       return {
         player: p,
         invested: invested,
         originalInvested: invested,
-        handStrength: winData ? winData.rank : -1,
+        handStrength: playerHand ? playerHand.hand.rank : -1,
         result: -invested,
         live: p.getStatus() !== 'Fold' && p.getStatus() !== 'Spectating',
         winner: false,
@@ -656,9 +664,6 @@ const Game = function (name, host) {
     for (p of playerInvestments) {
       p.gain = p.originalInvested + p.result;
       p.player.money += p.gain;
-      if (p.gain > 0) {
-        p.winner = true;
-      }
     }
     return playerInvestments;
   };
@@ -684,10 +689,10 @@ const Game = function (name, host) {
     if (Array.isArray(winners)) {
       for (playerHand of playerArray) {
         for (winner of winners) {
-          let winnerArray = winner.toString().split(', ');
-          if (
-            this.arraysEqual(playerHand.hand.cards.sort(), winnerArray.sort())
-          ) {
+          // Compare as strings — Card objects coerce, but keep it explicit.
+          const playerCards = playerHand.hand.cards.map(String).sort();
+          const winnerCards = winner.toString().split(', ').sort();
+          if (this.arraysEqual(playerCards, winnerCards)) {
             winnerData.push({
               player: playerHand.player,
               rank: playerHand.hand.rank,
@@ -745,6 +750,7 @@ const Game = function (name, host) {
         money: this.players[i].getMoney(),
         text: this.players[i].getStatus(),
         readyState: this.players[i].getReadyState(),
+        seatIndex: this.players[i].getSeatIndex(),
       });
     }
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
@@ -760,6 +766,8 @@ const Game = function (name, host) {
         roundInProgress: this.roundInProgress,
       });
     }
+    // Pot already paid out — clear so ready-phase rerenders don't re-show it.
+    this.clearTableStakes();
     this.startReadyTimeout();
   };
 
@@ -778,6 +786,7 @@ const Game = function (name, host) {
         buyIns: this.players[i].buyIns,
         readyState: this.players[i].getReadyState(),
         gain: winData ? winData.gain : null,
+        seatIndex: this.players[i].getSeatIndex(),
       });
     }
     const winnersUsernames = winners.map((a) => a.player.getUsername());
@@ -793,7 +802,14 @@ const Game = function (name, host) {
         roundInProgress: this.roundInProgress,
       });
     }
+    this.clearTableStakes();
     this.startReadyTimeout();
+  };
+
+  // After a hand is awarded, drop bet/pot state so between-hand UI shows $0.
+  this.clearTableStakes = () => {
+    this.roundData.bets = [];
+    this.foldPot = 0;
   };
 
   this.allPlayersAllIn = () => {
@@ -864,9 +880,65 @@ const Game = function (name, host) {
     return this.gameName;
   };
 
-  this.addPlayer = (playerName, socket) => {
+  this.getOccupiedSeatIndexes = () => {
+    return this.players
+      .map((p) => p.getSeatIndex())
+      .filter((i) => i != null && i >= 0);
+  };
+
+  this.pickRandomEmptySeat = (preferSeat) => {
+    const taken = new Set(this.getOccupiedSeatIndexes());
+    if (
+      preferSeat != null &&
+      preferSeat >= 0 &&
+      preferSeat < MAX_PLAYERS &&
+      !taken.has(preferSeat)
+    ) {
+      return preferSeat;
+    }
+    const empty = [];
+    for (let i = 0; i < MAX_PLAYERS; i++) {
+      if (!taken.has(i)) empty.push(i);
+    }
+    if (empty.length === 0) return null;
+    return empty[Math.floor(Math.random() * empty.length)];
+  };
+
+  this.sortPlayersBySeat = () => {
+    this.players.sort((a, b) => {
+      const sa = a.getSeatIndex();
+      const sb = b.getSeatIndex();
+      if (sa == null && sb == null) return 0;
+      if (sa == null) return 1;
+      if (sb == null) return -1;
+      return sa - sb;
+    });
+  };
+
+  // Assign seats to anyone still missing one (e.g. hot-reload / old sessions).
+  this.ensurePlayerSeats = () => {
+    let changed = false;
+    for (const p of this.players) {
+      if (p.getSeatIndex() == null) {
+        const seat = this.pickRandomEmptySeat();
+        if (seat != null) {
+          p.setSeatIndex(seat);
+          changed = true;
+        }
+      }
+    }
+    if (changed) this.sortPlayersBySeat();
+  };
+
+  this.addPlayer = (playerName, socket, preferSeat) => {
+    const seat = this.pickRandomEmptySeat(
+      preferSeat != null ? preferSeat : undefined
+    );
+    if (seat == null) return null;
     const player = new Player(playerName, socket, this.debug);
+    player.setSeatIndex(seat);
     this.players.push(player);
+    this.sortPlayersBySeat();
     return player;
   };
 
@@ -901,7 +973,12 @@ const Game = function (name, host) {
       player.disconnectTimer = null;
     }
     if (player.getMoney() > 0) player.setReadyState('undecided');
+    // Keep prior seat if still free; otherwise pick a random empty chair.
+    const seat = this.pickRandomEmptySeat(player.getSeatIndex());
+    if (seat == null) return null;
+    player.setSeatIndex(seat);
     this.players.push(player);
+    this.sortPlayersBySeat();
     return player;
   };
 
