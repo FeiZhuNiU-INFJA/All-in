@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src/client/img/pokerBanner.png" alt="All-In" width="720" />
+<img src="src/client/img/game_screenshot.png" alt="All-In" width="720" />
 
 # All-In
 

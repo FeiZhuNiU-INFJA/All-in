@@ -178,10 +178,6 @@ $(document).ready(function () {
     updateFullscreenBtn
   );
 
-  if ($('.tooltipped').length) {
-    $('.tooltipped').tooltip({ delay: 50 });
-  }
-
   // Refresh recovery: rejoin the last room within the server grace window.
   var session = loadSession();
   if (session && session.code && session.username) {
@@ -776,7 +772,7 @@ function renderHeroSeat(name, data, style) {
   else if (data.isChecked) statusText = 'Check';
   else if (data.text === 'Spectating') statusText = '旁观';
   else if (data.text === 'Reconnecting') statusText = '重连中…';
-  var handHtml = data.endHand
+  var handHtml = isHandRankLabel(data.endHand)
     ? '<div class="seat-hand">' + data.endHand + '</div>'
     : '';
   return (
@@ -876,6 +872,17 @@ function abbrevBlind(blind) {
   if (blind.indexOf('Small') !== -1) return 'SB';
   if (blind.indexOf('Big') !== -1) return 'BB';
   return blind;
+}
+
+/** True for pokersolver hand titles (Pair, High Card, …), not seat statuses. */
+function isHandRankLabel(s) {
+  if (!s) return false;
+  return (
+    s !== 'Fold' &&
+    s !== 'Spectating' &&
+    s !== 'Their Turn' &&
+    s !== 'Reconnecting'
+  );
 }
 
 function parseWinners(winners) {
@@ -1177,7 +1184,6 @@ socket.on('rerender', function (data) {
 });
 
 socket.on('gameBegin', function (data) {
-  $('#navbar-ptwu').hide();
   closeLobbyModal();
   if (data == undefined || data.ok === false) {
     return;
@@ -1265,8 +1271,8 @@ socket.on('reveal', function (data) {
         buyIns: p.buyIns,
         cards: p.cards,
         showCards: !p.folded,
-        // Showdown rank (e.g. "Pair, A's") — not Fold / ready labels.
-        endHand: !p.folded && p.hand ? p.hand : '',
+        // Showdown rank only — never echo status strings like "Spectating".
+        endHand: !p.folded && isHandRankLabel(p.hand) ? p.hand : '',
         readyState: p.readyState,
         roundInProgress: false,
       };
@@ -1607,7 +1613,7 @@ function renderSeat(name, data, style) {
   } else if (data.text === 'Reconnecting') {
     statusHtml = '<div class="seat-status seat-reconnecting-label">重连中…</div>';
   }
-  var handHtml = data.endHand
+  var handHtml = isHandRankLabel(data.endHand)
     ? '<div class="seat-hand">' + data.endHand + '</div>'
     : '';
   var topPct = style && style.top != null ? parseFloat(style.top) : 50;
