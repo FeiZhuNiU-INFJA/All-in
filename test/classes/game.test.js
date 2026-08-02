@@ -558,9 +558,13 @@ test('Test all-in 3 players low credits win', () => {
   expect(currentPlayer.money).toBe(STARTING_CHIPS - 10);
   expect(game.call(currentPlayer.socket)).toBe(true);
 
-  // Winner has to be p3 with 4 as
-  expect(p1.money).toBe(STARTING_CHIPS - 50);
-  expect(p2.money).toBe(STARTING_CHIPS - 50);
+  // Deterministic runout (Math.random → 0): board becomes A♦ A♣ K♣ T♠ J♠.
+  // p3 (AA) flops quad aces and takes the 150 main pot. The 3900 side pot is
+  // contested only by p1 (two pair, aces & 7s) and p2 (two pair, aces & 8s) —
+  // aces-and-eights beats aces-and-sevens, so p2 wins it outright. (Previously
+  // hand.rank tied the two "Two Pair" hands and wrongly split this side pot.)
+  expect(p1.money).toBe(0);
+  expect(p2.money).toBe(3900);
   expect(p3.money).toBe(150);
 
   expect(game.players.reduce((a, c) => a + c.money, 0)).toBe(
@@ -944,6 +948,99 @@ test('Test _distributeMoney', () => {
   expect(players[2].result).toBe(0);
   expect(players[3].result).toBe(90);
   expect(players[4].result).toBe(920);
+});
+
+const Card = require('../../src/classes/card.js');
+
+// Stand up a finished-street showdown without playing the hand out: seat the
+// players, hand them hole cards, fix the community, and record one betting
+// stage where everyone invested the same amount. evaluateWinners +
+// distributeMoney then run exactly as they do at a real showdown.
+function stageShowdown(game, seats, community, betPerPlayer) {
+  const players = seats.map((s) => {
+    const sock = new events.EventEmitter();
+    sock.id = s.id;
+    const p = game.addPlayer(String(s.id), sock);
+    p.cards = s.cards.map(([v, suit]) => new Card(v, suit));
+    return p;
+  });
+  game.community = community.map(([v, suit]) => new Card(v, suit));
+  game.roundData.bets = [
+    seats.map((s) => ({ player: String(s.id), bet: betPerPlayer })),
+  ];
+  return players;
+}
+
+test('showdown: a straight beats two high cards — only the straight wins', () => {
+  // Regression for the reported "all three players show Winner" screenshot.
+  // Board 3♦ 8♦ 2♥ 7♥ T♣. rona (9♦ J♦) makes 7-8-9-10-J, a straight; the other
+  // two only have K-high. Exactly one Winner, and rona sweeps the pot.
+  const game = new Game('showdown-straight', '1');
+  const players = stageShowdown(
+    game,
+    [
+      { id: 1, cards: [['K', '♥'], ['Q', '♥']] }, // 周神 — K high
+      { id: 2, cards: [['K', '♣'], ['Q', '♣']] }, // yulin — K high
+      { id: 3, cards: [[9, '♦'], ['J', '♦']] }, // rona — straight
+    ],
+    [[3, '♦'], [8, '♦'], [2, '♥'], [7, '♥'], [10, '♣']],
+    2000
+  );
+
+  const data = game.distributeMoney(game.evaluateWinners());
+  const forId = (id) => data.find((d) => d.player === players[id - 1]);
+
+  expect(data.filter((d) => d.winner).length).toBe(1);
+  expect(forId(3).winner).toBe(true); // rona (straight)
+  expect(forId(1).winner).toBe(false);
+  expect(forId(2).winner).toBe(false);
+  expect(forId(3).gain).toBe(6000); // sweeps the 3×2000 pot
+  expect(forId(1).gain).toBe(0);
+  expect(forId(2).gain).toBe(0);
+});
+
+test('showdown: same pair, better kicker wins — no false split', () => {
+  // The core defect: pokersolver's hand.rank ignores kickers, so ranking side
+  // pots by hand.rank alone treated two pair-of-Kings hands as a tie and split
+  // the pot. Board K♦ 5♣ 2♥ 7♠ 9♦ — both pair Kings; A-kicker must beat Q-kicker.
+  const game = new Game('showdown-kicker', '1');
+  const players = stageShowdown(
+    game,
+    [
+      { id: 1, cards: [['A', '♥'], ['K', '♠']] }, // pair K, ace kicker — wins
+      { id: 2, cards: [['Q', '♥'], ['K', '♣']] }, // pair K, queen kicker — loses
+    ],
+    [['K', '♦'], [5, '♣'], [2, '♥'], [7, '♠'], [9, '♦']],
+    2000
+  );
+
+  const data = game.distributeMoney(game.evaluateWinners());
+  const p1 = data.find((d) => d.player === players[0]);
+  const p2 = data.find((d) => d.player === players[1]);
+
+  expect(p1.winner).toBe(true);
+  expect(p2.winner).toBe(false);
+  expect(p1.gain).toBe(4000); // sweeps the 2×2000 pot
+  expect(p2.gain).toBe(0);
+});
+
+test('showdown: a genuine tie splits the pot and marks both winners', () => {
+  // The flip side of the kicker fix: identically-strong hands must still tie.
+  // Board 3♦ 8♦ 2♥ 7♥ T♣; both K♥Q♥-style holdings play the same K-high board.
+  const game = new Game('showdown-tie', '1');
+  const players = stageShowdown(
+    game,
+    [
+      { id: 1, cards: [['K', '♥'], ['Q', '♠']] }, // K high
+      { id: 2, cards: [['K', '♣'], ['Q', '♦']] }, // identical K high
+    ],
+    [[3, '♦'], [8, '♦'], [2, '♥'], [7, '♥'], [10, '♣']],
+    2000
+  );
+
+  const data = game.distributeMoney(game.evaluateWinners());
+  expect(data.filter((d) => d.winner).length).toBe(2);
+  expect(data.every((d) => d.gain === 2000)).toBe(true); // 4000 split evenly
 });
 
 
