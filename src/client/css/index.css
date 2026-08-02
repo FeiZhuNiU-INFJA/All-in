@@ -500,6 +500,50 @@ code {
     0 1px 3px rgba(0, 0, 0, 0.35) !important;
 }
 
+/* Quick pot-fraction bet sizing (¼ ⅓ ½ ⅔) above the amount slider. */
+.pot-fraction-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 6px 0 16px;
+}
+
+.pot-frac-btn {
+  flex: 1 1 0;
+  padding: 9px 0;
+  background: rgba(212, 181, 106, 0.1);
+  color: var(--brass);
+  border: 1px solid rgba(212, 181, 106, 0.45);
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+  transition: background 60ms ease-out, transform 60ms ease-out;
+}
+
+.pot-frac-btn:hover {
+  background: rgba(212, 181, 106, 0.2);
+}
+
+.pot-frac-btn:active {
+  transform: translateY(1px);
+  background: rgba(212, 181, 106, 0.28);
+}
+
+.pot-frac-btn:disabled {
+  opacity: 0.32;
+  color: rgba(212, 181, 106, 0.5);
+  border-color: rgba(212, 181, 106, 0.18);
+  background: rgba(212, 181, 106, 0.04);
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .range-field input[type='range'] {
   -webkit-appearance: none;
   appearance: none;

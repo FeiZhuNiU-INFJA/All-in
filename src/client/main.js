@@ -1785,6 +1785,74 @@ function renderOpponentCard(card) {
   );
 }
 
+// Current pot as shown on the table (rerender keeps #potAmount up to date).
+function currentPotAmount() {
+  var raw = ($('#potAmount').text() || '').replace(/[^0-9.]/g, '');
+  var n = parseInt(raw, 10);
+  return isNaN(n) ? 0 : n;
+}
+
+// Quick-size a bet/raise to a fraction of the pot. The slider already carries
+// the legal range (min-raise ↔ all-in), so clamp the target into it — a small
+// pot snaps up to the minimum, a huge fraction snaps down to all-in.
+function applyPotFraction($slider, num, den, refreshDisplay) {
+  if (!$slider.length) return;
+  var pot = currentPotAmount();
+  if (pot <= 0) return;
+  var min = parseInt($slider.attr('min'), 10) || 0;
+  var max = parseInt($slider.attr('max'), 10) || 0;
+  var target = Math.round((pot * num) / den);
+  target = Math.max(min, Math.min(max, target));
+  $slider.val(target);
+  refreshDisplay();
+}
+
+// Opening bet: a fraction of the current pot is exactly the amount to wager.
+function setBetFraction(num, den) {
+  applyPotFraction($('#betRangeSlider'), num, den, updateBetDisplay);
+}
+
+// Facing a bet, sized the poker-standard way so the buttons stay useful even
+// when the pot is small (e.g. preflop): a "½ pot" raise puts in half the pot
+// AFTER calling, on top of the call — raise-to = topBet + fraction×(pot+toCall).
+// Populated by the updateRaiseModal socket event below.
+var raiseContext = null;
+
+// Raw (unclamped) raise-to for a pot fraction, or null without context.
+function raiseFractionTarget(num, den) {
+  if (!raiseContext) return null;
+  var potAfterCall = raiseContext.pot + raiseContext.toCall;
+  return raiseContext.topBet + Math.round((potAfterCall * num) / den);
+}
+
+function setRaiseFraction(num, den) {
+  var $slider = $('#raiseRangeSlider');
+  var raiseTo = raiseFractionTarget(num, den);
+  if (!$slider.length || raiseTo == null) return;
+  var min = parseInt($slider.attr('min'), 10) || 0;
+  var max = parseInt($slider.attr('max'), 10) || 0;
+  raiseTo = Math.max(min, Math.min(max, raiseTo));
+  $slider.val(raiseTo);
+  updateRaiseDisplay();
+}
+
+// Grey out any pot-fraction whose raise would only clamp to the minimum raise
+// (or that can't move the slider at all) — against a big bet a "¼ pot" raise
+// is below the legal minimum, so the button would look dead if left active.
+function refreshRaiseFractionButtons() {
+  var $slider = $('#raiseRangeSlider');
+  var min = parseInt($slider.attr('min'), 10) || 0;
+  var max = parseInt($slider.attr('max'), 10) || 0;
+  $('#raiseFractionRow .pot-frac-btn').each(function () {
+    var num = parseInt(this.getAttribute('data-num'), 10);
+    var den = parseInt(this.getAttribute('data-den'), 10);
+    var raw = raiseFractionTarget(num, den);
+    // Meaningful only if it lands above the minimum and the slider can move.
+    var enabled = raw != null && min < max && raw > min;
+    this.disabled = !enabled;
+  });
+}
+
 function updateBetDisplay() {
   if ($('#betRangeSlider').val() == $('#usernamesMoney').text()) {
     $('#betDisplay').html(
@@ -1819,6 +1887,11 @@ function updateRaiseDisplay() {
 }
 
 socket.on('updateRaiseModal', function (data) {
+  raiseContext = {
+    topBet: data.topBet || 0,
+    pot: data.pot || 0,
+    toCall: data.toCall || 0,
+  };
   var minRaise = data.minRaise || data.topBet;
   // If the player can't afford a full min-raise, the slider lets them go all-in.
   var sliderMin =
@@ -1828,6 +1901,7 @@ socket.on('updateRaiseModal', function (data) {
   $slider.attr({ max: data.usernameMoney, min: sliderMin });
   $slider.val(sliderMin); // default to the minimum raise, show the amount right away
   updateRaiseDisplay();
+  refreshRaiseFractionButtons();
 });
 
 function updateRaiseModal() {
