@@ -1785,6 +1785,36 @@ function renderOpponentCard(card) {
   );
 }
 
+// Current pot as shown on the table (rerender keeps #potAmount up to date).
+function currentPotAmount() {
+  var raw = ($('#potAmount').text() || '').replace(/[^0-9.]/g, '');
+  var n = parseInt(raw, 10);
+  return isNaN(n) ? 0 : n;
+}
+
+// Quick-size a bet/raise to a fraction of the pot. The slider already carries
+// the legal range (min-raise ↔ all-in), so clamp the target into it — a small
+// pot snaps up to the minimum, a huge fraction snaps down to all-in.
+function applyPotFraction($slider, num, den, refreshDisplay) {
+  if (!$slider.length) return;
+  var pot = currentPotAmount();
+  if (pot <= 0) return;
+  var min = parseInt($slider.attr('min'), 10) || 0;
+  var max = parseInt($slider.attr('max'), 10) || 0;
+  var target = Math.round((pot * num) / den);
+  target = Math.max(min, Math.min(max, target));
+  $slider.val(target);
+  refreshDisplay();
+}
+
+function setBetFraction(num, den) {
+  applyPotFraction($('#betRangeSlider'), num, den, updateBetDisplay);
+}
+
+function setRaiseFraction(num, den) {
+  applyPotFraction($('#raiseRangeSlider'), num, den, updateRaiseDisplay);
+}
+
 function updateBetDisplay() {
   if ($('#betRangeSlider').val() == $('#usernamesMoney').text()) {
     $('#betDisplay').html(
