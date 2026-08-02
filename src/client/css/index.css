@@ -535,6 +535,15 @@ code {
   background: rgba(212, 181, 106, 0.28);
 }
 
+.pot-frac-btn:disabled {
+  opacity: 0.32;
+  color: rgba(212, 181, 106, 0.5);
+  border-color: rgba(212, 181, 106, 0.18);
+  background: rgba(212, 181, 106, 0.04);
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .range-field input[type='range'] {
   -webkit-appearance: none;
   appearance: none;
