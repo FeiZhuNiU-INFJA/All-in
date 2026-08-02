@@ -751,18 +751,45 @@ const Game = function (name, host) {
     }
   };
 
+  // Total-order hand strength for every showdown hand, kickers included.
+  //
+  // pokersolver's `hand.rank` only encodes the hand CATEGORY (High Card = 1 …
+  // Straight Flush = 9); it ignores kickers. Ranking side pots by `hand.rank`
+  // alone mis-scores hands that share a category — two "High Card" hands with
+  // different kickers, or a pair of Kings vs a pair of Queens — as equal, so a
+  // pot one player clearly won gets split and everyone lights up "Winner".
+  //
+  // Derive a real total order by repeatedly asking pokersolver for the current
+  // best hand(s): each "layer" of co-best hands shares a strength, genuinely
+  // tied hands share a strength, and stronger hands score higher. Values are
+  // only ever compared against each other, so their absolute size is irrelevant.
+  this.rankHandStrengths = (playersData) => {
+    const strengthByHand = new Map();
+    let remaining = playersData.map((pd) => pd.hand);
+    let level = remaining.length;
+    while (remaining.length > 0) {
+      const best = Hand.winners(remaining);
+      for (const hand of best) strengthByHand.set(hand, level);
+      remaining = remaining.filter((hand) => !best.includes(hand));
+      level--;
+    }
+    return strengthByHand;
+  };
+
   this.distributeMoney = (result) => {
+    const playersData = result.playersData || [];
+    // Rank once, up front, so every side pot shares one consistent total order.
+    const strengthByHand = this.rankHandStrengths(playersData);
     let playerInvestments = this.players.map((p) => {
-      // Every live player needs a real hand rank for side pots. Using only
-      // winnerData left losers at -1; if matching failed, EVERYONE was -1 and
-      // the pot was split — hence multiple "Winner" badges on a clear beat.
-      const playerHand = (result.playersData || []).find((pd) => pd.player === p);
+      // Every live player needs a real hand strength for side pots. Losers left
+      // at -1 (folded / not at showdown) can never out-rank a live hand.
+      const playerHand = playersData.find((pd) => pd.player === p);
       const invested = this.getTotalInvested(p);
       return {
         player: p,
         invested: invested,
         originalInvested: invested,
-        handStrength: playerHand ? playerHand.hand.rank : -1,
+        handStrength: playerHand ? strengthByHand.get(playerHand.hand) : -1,
         result: -invested,
         live: p.getStatus() !== 'Fold' && p.getStatus() !== 'Spectating',
         winner: false,
