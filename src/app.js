@@ -134,12 +134,17 @@ io.on('connection', (socket) => {
       (r) => r.findPlayer(socket.id).socket.id === socket.id
     );
     if (game != undefined) {
+      const player = game.findPlayer(socket.id);
+      const topBet = game.getCurrentTopBet();
+      const stageBet = game.getPlayerBetInStage(player);
       socket.emit('updateRaiseModal', {
-        topBet: game.getCurrentTopBet(),
-        usernameMoney:
-          game.getPlayerBetInStage(game.findPlayer(socket.id)) +
-          game.findPlayer(socket.id).getMoney(),
-        minRaise: game.getCurrentTopBet() + game.lastRaiseSize,
+        topBet: topBet,
+        usernameMoney: stageBet + player.getMoney(),
+        minRaise: topBet + game.lastRaiseSize,
+        // For pot-fraction raise sizing on the client: current pot and the
+        // amount this player still needs to put in to call.
+        pot: game.getCurrentPot(),
+        toCall: Math.max(0, topBet - stageBet),
       });
     }
   });

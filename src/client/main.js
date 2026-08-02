@@ -1807,12 +1807,27 @@ function applyPotFraction($slider, num, den, refreshDisplay) {
   refreshDisplay();
 }
 
+// Opening bet: a fraction of the current pot is exactly the amount to wager.
 function setBetFraction(num, den) {
   applyPotFraction($('#betRangeSlider'), num, den, updateBetDisplay);
 }
 
+// Facing a bet, sized the poker-standard way so the buttons stay useful even
+// when the pot is small (e.g. preflop): a "½ pot" raise puts in half the pot
+// AFTER calling, on top of the call — raise-to = topBet + fraction×(pot+toCall).
+// Populated by the updateRaiseModal socket event below.
+var raiseContext = null;
+
 function setRaiseFraction(num, den) {
-  applyPotFraction($('#raiseRangeSlider'), num, den, updateRaiseDisplay);
+  var $slider = $('#raiseRangeSlider');
+  if (!$slider.length || !raiseContext) return;
+  var potAfterCall = raiseContext.pot + raiseContext.toCall;
+  var raiseTo = raiseContext.topBet + Math.round((potAfterCall * num) / den);
+  var min = parseInt($slider.attr('min'), 10) || 0;
+  var max = parseInt($slider.attr('max'), 10) || 0;
+  raiseTo = Math.max(min, Math.min(max, raiseTo));
+  $slider.val(raiseTo);
+  updateRaiseDisplay();
 }
 
 function updateBetDisplay() {
@@ -1849,6 +1864,11 @@ function updateRaiseDisplay() {
 }
 
 socket.on('updateRaiseModal', function (data) {
+  raiseContext = {
+    topBet: data.topBet || 0,
+    pot: data.pot || 0,
+    toCall: data.toCall || 0,
+  };
   var minRaise = data.minRaise || data.topBet;
   // If the player can't afford a full min-raise, the slider lets them go all-in.
   var sliderMin =
