@@ -313,6 +313,42 @@ const Game = function (name, host) {
     this.rerender();
   };
 
+  // Room session chip ledger: live seats + finalized disconnects. Cleared only
+  // when the room itself is destroyed / reset (no live players left).
+  // Net = money − buyIns×STARTING_CHIPS (1 耻辱币 = −2000).
+  this.getSessionLedger = () => {
+    const rows = [];
+    for (let i = 0; i < this.players.length; i++) {
+      const p = this.players[i];
+      const money = p.getMoney();
+      const buyIns = p.buyIns || 0;
+      rows.push({
+        username: p.getUsername(),
+        money,
+        buyIns,
+        net: money - buyIns * STARTING_CHIPS,
+        present: true,
+        reconnecting: !!p.pendingDisconnect,
+      });
+    }
+    for (let i = 0; i < this.disconnectedPlayers.length; i++) {
+      const p = this.disconnectedPlayers[i];
+      const money = p.getMoney();
+      const buyIns = p.buyIns || 0;
+      rows.push({
+        username: p.getUsername(),
+        money,
+        buyIns,
+        net: money - buyIns * STARTING_CHIPS,
+        present: false,
+        reconnecting: false,
+      });
+    }
+    // Most chips first.
+    rows.sort((a, b) => b.money - a.money || a.username.localeCompare(b.username));
+    return rows;
+  };
+
   this.rerender = () => {
     this.ensurePlayerSeats();
     let playersData = [];
@@ -332,6 +368,7 @@ const Game = function (name, host) {
         seatIndex: this.players[pn].getSeatIndex(),
       });
     }
+    const ledger = this.getSessionLedger();
     for (let pn = 0; pn < this.getNumPlayers(); pn++) {
       this.players[pn].emit('rerender', {
         community: this.community,
@@ -342,6 +379,7 @@ const Game = function (name, host) {
         stage: this.getStageName(),
         pot: this.getCurrentPot(),
         players: playersData,
+        ledger,
         myMoney: this.players[pn].getMoney(),
         myBet: this.getPlayerBetInStage(this.players[pn]),
         myStatus: this.players[pn].getStatus(),

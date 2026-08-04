@@ -500,7 +500,7 @@ code {
     0 1px 3px rgba(0, 0, 0, 0.35) !important;
 }
 
-/* Quick pot-fraction bet sizing (¼ ⅓ ½ ⅔) above the amount slider. */
+/* Quick bet/raise sizing (⅓½⅔ Pot / 2x·2.5x·3x·Pot) above the amount slider. */
 .pot-fraction-row {
   display: flex;
   gap: 8px;
@@ -554,12 +554,19 @@ code {
   padding: 0;
   margin: 8px 0;
   cursor: pointer;
+  --range-pct: 0%;
 }
 
 .range-field input[type='range']::-webkit-slider-runnable-track {
   height: 8px;
   border-radius: 4px;
-  background: linear-gradient(90deg, var(--brass-deep), var(--brass));
+  background: linear-gradient(
+    to right,
+    var(--brass-deep) 0%,
+    var(--brass) var(--range-pct),
+    rgba(255, 255, 255, 0.12) var(--range-pct),
+    rgba(255, 255, 255, 0.12) 100%
+  );
   border: 1px solid rgba(0, 0, 0, 0.35);
 }
 
@@ -579,8 +586,14 @@ code {
 .range-field input[type='range']::-moz-range-track {
   height: 8px;
   border-radius: 4px;
-  background: linear-gradient(90deg, var(--brass-deep), var(--brass));
+  background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.range-field input[type='range']::-moz-range-progress {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--brass-deep), var(--brass));
 }
 
 .range-field input[type='range']::-moz-range-thumb {
@@ -679,9 +692,11 @@ body.modal-open {
 }
 
 .table-hud {
+  position: relative;
   text-align: center;
   padding: 2px 0 4px;
   flex-shrink: 0;
+  min-height: 28px;
 }
 
 .table-hud-message {
@@ -691,6 +706,143 @@ body.modal-open {
   min-height: 0;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.ledger-btn {
+  position: absolute;
+  top: 0;
+  left: max(8px, env(safe-area-inset-left, 0px));
+  z-index: 5;
+  border: 1px solid rgba(212, 181, 106, 0.45);
+  border-radius: 4px;
+  background: rgba(12, 14, 18, 0.82);
+  color: var(--brass);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 6px 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.ledger-btn:hover {
+  background: rgba(212, 181, 106, 0.14);
+}
+
+.ledger-btn:active {
+  transform: scale(0.97);
+}
+
+.ledger-panel {
+  max-width: 420px;
+  width: calc(100vw - 32px);
+}
+
+.ledger-hint {
+  margin: 6px 0 14px !important;
+  font-size: 0.78rem !important;
+  opacity: 0.65;
+  letter-spacing: 0.02em;
+}
+
+.ledger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(55vh, 420px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) auto auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(212, 181, 106, 0.18);
+  border-radius: 6px;
+}
+
+.ledger-row.is-away {
+  opacity: 0.62;
+}
+
+.ledger-row.is-me {
+  border-color: rgba(212, 181, 106, 0.55);
+  background: rgba(212, 181, 106, 0.08);
+}
+
+.ledger-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-weight: 600;
+  color: var(--ivory);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ledger-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-tag {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
+  padding: 1px 5px;
+}
+
+.ledger-stack {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--brass);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ledger-net {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  white-space: nowrap;
+  text-align: right;
+  min-width: 4.5em;
+}
+
+.ledger-net.is-pos {
+  color: #7dcea0;
+}
+
+.ledger-net.is-neg {
+  color: #e57373;
+}
+
+.ledger-net.is-zero {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.ledger-empty {
+  text-align: center;
+  padding: 18px 8px;
+  opacity: 0.6;
+  font-size: 0.9rem;
 }
 
 .felt-countdown {

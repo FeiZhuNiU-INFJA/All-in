@@ -910,6 +910,71 @@ function shameCoinsHtml(count) {
   );
 }
 
+// Room-wide chip ledger from the last rerender (includes disconnected players).
+var sessionLedger = [];
+var SHAME_COIN_VALUE = 2000;
+
+function formatLedgerMoney(n) {
+  var sign = n > 0 ? '+' : '';
+  return sign + '$' + n;
+}
+
+function renderLedgerList() {
+  var $list = $('#ledgerList');
+  if (!sessionLedger.length) {
+    $list.html('<div class="ledger-empty">暂无玩家数据</div>');
+    return;
+  }
+  var html = sessionLedger
+    .map(function (row) {
+      var net =
+        typeof row.net === 'number'
+          ? row.net
+          : row.money - (row.buyIns || 0) * SHAME_COIN_VALUE;
+      var netClass =
+        net > 0 ? 'is-pos' : net < 0 ? 'is-neg' : 'is-zero';
+      var tags = '';
+      if (row.reconnecting) tags += '<span class="ledger-tag">重连中</span>';
+      else if (!row.present) tags += '<span class="ledger-tag">已离开</span>';
+      if (row.username === myUsername) tags += '<span class="ledger-tag">我</span>';
+      var rowClass = 'ledger-row';
+      if (!row.present) rowClass += ' is-away';
+      if (row.username === myUsername) rowClass += ' is-me';
+      return (
+        '<div class="' +
+        rowClass +
+        '">' +
+        '<div class="ledger-name">' +
+        '<span class="ledger-name-text"></span>' +
+        shameCoinsHtml(row.buyIns) +
+        tags +
+        '</div>' +
+        '<div class="ledger-stack">$' +
+        row.money +
+        '</div>' +
+        '<div class="ledger-net ' +
+        netClass +
+        '">' +
+        formatLedgerMoney(net) +
+        '</div>' +
+        '</div>'
+      );
+    })
+    .join('');
+  $list.html(html);
+  // Set names via text() so usernames can't inject HTML.
+  $list.find('.ledger-row').each(function (i) {
+    $(this)
+      .find('.ledger-name-text')
+      .text(sessionLedger[i].username);
+  });
+}
+
+function openLedgerModal() {
+  renderLedgerList();
+  openLobbyModal('#ledgerModal');
+}
+
 function requestRebuy() {
   socket.emit('rebuy');
 }
@@ -1184,6 +1249,10 @@ function clearAllSeatStreetBets() {
 
 socket.on('rerender', function (data) {
   myUsername = data.username;
+  if (Array.isArray(data.ledger)) {
+    sessionLedger = data.ledger;
+    if ($('#ledgerModal').hasClass('is-open')) renderLedgerList();
+  }
   // Clear any lingering action popups. Popups on opponent seats get wiped when
   // the seats are rebuilt below, but the hero's popup survives renderSelf, so
   // without this it would persist into the ready-up phase and look like it
@@ -1792,6 +1861,46 @@ function currentPotAmount() {
   return isNaN(n) ? 0 : n;
 }
 
+// Keep the brass fill + Materialize bubble in sync with the range value.
+// Programmatic .val() updates the number but WebKit often leaves the thumb /
+// track paint stale — setting --range-pct and re-assigning native .value fixes it.
+function updateRangeFill($slider) {
+  var el = $slider && $slider[0];
+  if (!el) return;
+  var min = parseFloat(el.min);
+  var max = parseFloat(el.max);
+  var val = parseFloat(el.value);
+  if (isNaN(min)) min = 0;
+  if (isNaN(max)) max = 100;
+  if (isNaN(val)) val = min;
+  var pct = max > min ? ((val - min) / (max - min)) * 100 : 0;
+  el.style.setProperty('--range-pct', pct + '%');
+  var $thumb = $slider.siblings('.thumb');
+  if ($thumb.length) {
+    $thumb.css('left', (pct / 100) * $slider.outerWidth());
+    $thumb.find('.value').text(String(el.value));
+  }
+}
+
+function setSliderValue($slider, value) {
+  var el = $slider && $slider[0];
+  if (!el) return;
+  var min = parseFloat(el.min);
+  var max = parseFloat(el.max);
+  if (isNaN(min)) min = 0;
+  if (isNaN(max)) max = 100;
+  var clamped = Math.round(Math.max(min, Math.min(max, value)));
+  // Native assignment (not jQuery .val) so the thumb actually relocates.
+  el.value = clamped;
+  // Bounce once on the next frame — some WebKit builds ignore the first write
+  // when min/max were just changed or the modal just became visible.
+  requestAnimationFrame(function () {
+    el.value = clamped;
+    updateRangeFill($slider);
+  });
+  updateRangeFill($slider);
+}
+
 // Quick-size a bet/raise to a fraction of the pot. The slider already carries
 // the legal range (min-raise ↔ all-in), so clamp the target into it — a small
 // pot snaps up to the minimum, a huge fraction snaps down to all-in.
@@ -1799,11 +1908,14 @@ function applyPotFraction($slider, num, den, refreshDisplay) {
   if (!$slider.length) return;
   var pot = currentPotAmount();
   if (pot <= 0) return;
-  var min = parseInt($slider.attr('min'), 10) || 0;
-  var max = parseInt($slider.attr('max'), 10) || 0;
+  var el = $slider[0];
+  var min = parseFloat(el.min);
+  var max = parseFloat(el.max);
+  if (isNaN(min)) min = 0;
+  if (isNaN(max)) max = 0;
   var target = Math.round((pot * num) / den);
   target = Math.max(min, Math.min(max, target));
-  $slider.val(target);
+  setSliderValue($slider, target);
   refreshDisplay();
 }
 
@@ -1812,48 +1924,70 @@ function setBetFraction(num, den) {
   applyPotFraction($('#betRangeSlider'), num, den, updateBetDisplay);
 }
 
-// Facing a bet, sized the poker-standard way so the buttons stay useful even
-// when the pot is small (e.g. preflop): a "½ pot" raise puts in half the pot
-// AFTER calling, on top of the call — raise-to = topBet + fraction×(pot+toCall).
-// Populated by the updateRaiseModal socket event below.
+// Facing a bet: quick sizes are multiples of the facing bet (2x / 2.5x / 3x —
+// the usual 2bet / 3bet opens) plus a full-pot option. Populated by
+// updateRaiseModal below.
 var raiseContext = null;
 
-// Raw (unclamped) raise-to for a pot fraction, or null without context.
+// Nx raise-to = N × topBet (standard poker UI, e.g. 3x a $6 open → raise to $18).
+function raiseMultipleTarget(mult) {
+  if (!raiseContext || !(mult > 0)) return null;
+  return Math.round(raiseContext.topBet * mult);
+}
+
+// Pot-sized raise: put in the pot AFTER calling, on top of the call —
+// raise-to = topBet + (pot + toCall).
 function raiseFractionTarget(num, den) {
   if (!raiseContext) return null;
   var potAfterCall = raiseContext.pot + raiseContext.toCall;
   return raiseContext.topBet + Math.round((potAfterCall * num) / den);
 }
 
-function setRaiseFraction(num, den) {
+function applyRaiseTo(raiseTo) {
   var $slider = $('#raiseRangeSlider');
-  var raiseTo = raiseFractionTarget(num, den);
   if (!$slider.length || raiseTo == null) return;
-  var min = parseInt($slider.attr('min'), 10) || 0;
-  var max = parseInt($slider.attr('max'), 10) || 0;
-  raiseTo = Math.max(min, Math.min(max, raiseTo));
-  $slider.val(raiseTo);
+  setSliderValue($slider, raiseTo);
   updateRaiseDisplay();
 }
 
-// Grey out any pot-fraction whose raise would only clamp to the minimum raise
-// (or that can't move the slider at all) — against a big bet a "¼ pot" raise
+function setRaiseMultiple(mult) {
+  applyRaiseTo(raiseMultipleTarget(mult));
+}
+
+function setRaiseFraction(num, den) {
+  applyRaiseTo(raiseFractionTarget(num, den));
+}
+
+// Grey out any quick-size whose raise would only clamp to the minimum raise
+// (or that can't move the slider at all) — against a big bet a small multiple
 // is below the legal minimum, so the button would look dead if left active.
 function refreshRaiseFractionButtons() {
   var $slider = $('#raiseRangeSlider');
-  var min = parseInt($slider.attr('min'), 10) || 0;
-  var max = parseInt($slider.attr('max'), 10) || 0;
+  var el = $slider[0];
+  if (!el) return;
+  var min = parseFloat(el.min);
+  var max = parseFloat(el.max);
+  if (isNaN(min)) min = 0;
+  if (isNaN(max)) max = 0;
   $('#raiseFractionRow .pot-frac-btn').each(function () {
-    var num = parseInt(this.getAttribute('data-num'), 10);
-    var den = parseInt(this.getAttribute('data-den'), 10);
-    var raw = raiseFractionTarget(num, den);
-    // Meaningful only if it lands above the minimum and the slider can move.
-    var enabled = raw != null && min < max && raw > min;
+    var kind = this.getAttribute('data-kind');
+    var raw =
+      kind === 'x'
+        ? raiseMultipleTarget(parseFloat(this.getAttribute('data-mult')))
+        : raiseFractionTarget(
+            parseInt(this.getAttribute('data-num'), 10),
+            parseInt(this.getAttribute('data-den'), 10)
+          );
+    // Enabled when the raw size is at/above the legal minimum and the slider
+    // can still move. Below-min sizes (e.g. 2x into a big open) stay greyed;
+    // sizes above max still work — they clamp to all-in.
+    var enabled = raw != null && min < max && raw >= min;
     this.disabled = !enabled;
   });
 }
 
 function updateBetDisplay() {
+  updateRangeFill($('#betRangeSlider'));
   if ($('#betRangeSlider').val() == $('#usernamesMoney').text()) {
     $('#betDisplay').html(
       '<h3 class="center-align">All-In $' +
@@ -1869,16 +2003,17 @@ function updateBetDisplay() {
 
 function updateBetModal() {
   $('#betDisplay').html('<h3 class="center-align">$0</h3>');
-  document.getElementById('betRangeSlider').value = 0;
+  var el = document.getElementById('betRangeSlider');
   var usernamesMoneyStr = $('#usernamesMoney').text().replace('$', '');
-  var usernamesMoneyNum = parseInt(usernamesMoneyStr);
-  $('#betRangeSlider').attr({
-    max: usernamesMoneyNum,
-    min: 0,
-  });
+  var usernamesMoneyNum = parseInt(usernamesMoneyStr, 10) || 0;
+  el.min = 0;
+  el.max = usernamesMoneyNum;
+  setSliderValue($('#betRangeSlider'), 0);
+  updateBetDisplay();
 }
 
 function updateRaiseDisplay() {
+  updateRangeFill($('#raiseRangeSlider'));
   $('#raiseDisplay').html(
     '<h3 class="center-align">加注到 $' +
       $('#raiseRangeSlider').val() +
@@ -1898,8 +2033,10 @@ socket.on('updateRaiseModal', function (data) {
     data.usernameMoney >= minRaise ? minRaise : data.usernameMoney;
   sliderMin = Math.max(data.topBet, sliderMin);
   var $slider = $('#raiseRangeSlider');
-  $slider.attr({ max: data.usernameMoney, min: sliderMin });
-  $slider.val(sliderMin); // default to the minimum raise, show the amount right away
+  var el = $slider[0];
+  el.min = sliderMin;
+  el.max = data.usernameMoney;
+  setSliderValue($slider, sliderMin); // default to the minimum raise
   updateRaiseDisplay();
   refreshRaiseFractionButtons();
 });

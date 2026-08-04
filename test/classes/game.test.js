@@ -1541,6 +1541,61 @@ test('reconnecting player keeps their chips and shame coins', () => {
   expect(game.players.length).toBe(2);
 });
 
+test('session ledger includes disconnected players with net = money − buyIns×2000', () => {
+  const game = new Game('ledger-game', '1');
+  const p1 = addMockPlayer(game, 1);
+  const p2 = addMockPlayer(game, 2);
+  p1.money = 500;
+  p1.buyIns = 2; // net = 500 − 4000 = −3500
+  p2.money = STARTING_CHIPS;
+  p2.buyIns = 0; // net = 2000
+  game.disconnectPlayer(p1);
+
+  const ledger = game.getSessionLedger();
+  expect(ledger).toHaveLength(2);
+  // Most chips first.
+  expect(ledger[0].username).toBe('2');
+  expect(ledger[0].present).toBe(true);
+  expect(ledger[0].net).toBe(STARTING_CHIPS);
+  expect(ledger[1].username).toBe('1');
+  expect(ledger[1].present).toBe(false);
+  expect(ledger[1].money).toBe(500);
+  expect(ledger[1].buyIns).toBe(2);
+  expect(ledger[1].net).toBe(500 - 2 * STARTING_CHIPS);
+
+  // Still listed after disconnect until the room itself is gone.
+  expect(game.disconnectedPlayers).toHaveLength(1);
+  // Rejoin removes them from the away list and puts them back present.
+  const s1b = new events.EventEmitter();
+  s1b.id = 99;
+  game.reconnectPlayer('1', s1b);
+  const after = game.getSessionLedger();
+  expect(after.find((r) => r.username === '1').present).toBe(true);
+  expect(game.disconnectedPlayers).toHaveLength(0);
+});
+
+test('rerender payload includes the session ledger', () => {
+  const game = new Game('ledger-payload', '1');
+  const s1 = Object.assign(new events.EventEmitter(), { id: 1 });
+  const s2 = Object.assign(new events.EventEmitter(), { id: 2 });
+  let payload = null;
+  s1.on('rerender', (data) => {
+    payload = data;
+  });
+  game.addPlayer('1', s1, 0);
+  const p2 = game.addPlayer('2', s2, 1);
+  p2.money = 0;
+  p2.buyIns = 1;
+  game.disconnectPlayer(p2);
+  game.rerender();
+  expect(payload).toBeTruthy();
+  expect(Array.isArray(payload.ledger)).toBe(true);
+  expect(payload.ledger).toHaveLength(2);
+  const away = payload.ledger.find((r) => r.username === '2');
+  expect(away.present).toBe(false);
+  expect(away.net).toBe(-STARTING_CHIPS);
+});
+
 test('reconnect returns null when there is no saved session', () => {
   const game = new Game('noreconnect-game', '1');
   addMockPlayer(game, 1);
