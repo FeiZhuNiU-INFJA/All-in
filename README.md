@@ -79,7 +79,8 @@ Friends on your LAN can open http://192.168.1.23:5714
 
 ```bash
 PORT=5714 yarn start
-# 或常驻：npx pm2 start src/app.js --name all-in
+# 或常驻（公网 + HTTPS 时绑本机，不对公网暴露 5714）：
+# HOST=127.0.0.1 PORT=5714 npx pm2 start src/app.js --name all-in
 ```
 
 把 `5714` 放行（或只对本机开放，见下方 HTTPS），朋友访问：
@@ -88,8 +89,13 @@ PORT=5714 yarn start
 http://你的服务器IP:5714
 ```
 
-生产环境建议用 `pm2` / `systemd` / Docker 守护进程。
+生产环境建议用 `pm2` / `systemd` / Docker 守护进程。配好 HTTPS 后应使用：
 
+```bash
+HOST=127.0.0.1 PORT=5714 npx pm2 start src/app.js --name all-in
+```
+
+这样 `http://IP:5714` 从外网不可达，只能走 `https://IP/`（Caddy 反代本机 5714）。安全组也可关掉对公网的 **5714**，只留 **80/443**。
 ### HTTPS（语音 / 麦克风需要）
 
 **All-In 本身只提供 HTTP**（`src/app.js` 监听 `5714`）。浏览器开麦要求 **HTTPS 安全上下文**，所以公网部署时要在前面加一层 **反向代理** 做 TLS 终结。
