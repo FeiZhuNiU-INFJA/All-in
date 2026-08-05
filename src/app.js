@@ -11,6 +11,10 @@ const {
   validateStart,
 } = require('./joinValidation.js');
 const { DISCONNECT_GRACE_MS } = require('./constants.js');
+const {
+  buildVoicePeerList,
+  canRelayVoiceSignal,
+} = require('./voiceSignaling.js');
 
 const app = express();
 const server = http.createServer(app);
@@ -35,6 +39,38 @@ function lanAddresses() {
 app.use('/', express.static(__dirname + '/client'));
 
 let rooms = [];
+
+/** socket.id → { code, username } for active voice participants */
+const voiceParticipants = new Map();
+
+function findGameBySocket(socket) {
+  return rooms.find((r) => {
+    const p = r.findPlayer(socket.id);
+    return p && p.socket && p.socket.id === socket.id;
+  });
+}
+
+function getSocketById(socketId) {
+  const ns = io.sockets;
+  if (ns.sockets && typeof ns.sockets.get === 'function') {
+    return ns.sockets.get(socketId);
+  }
+  if (ns.connected) return ns.connected[socketId];
+  return null;
+}
+
+function leaveVoice(socket) {
+  if (!voiceParticipants.has(socket.id)) return;
+  const info = voiceParticipants.get(socket.id);
+  voiceParticipants.delete(socket.id);
+  const game = rooms.find((r) => r.getCode() === info.code);
+  if (!game) return;
+  game.players.forEach((p) => {
+    if (p.socket && p.socket.id !== socket.id) {
+      p.emit('voicePeerLeft', { socketId: socket.id });
+    }
+  });
+}
 
 // Persistent lobby: a fixed room (code 2026) that always exists, so friends
 // can jump straight in without anyone having to create it first.
@@ -195,7 +231,43 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('voiceJoin', () => {
+    const game = findGameBySocket(socket);
+    if (!game) return;
+    const player = game.findPlayer(socket.id);
+    if (!player) return;
+    const username = player.getUsername();
+    const code = game.getCode();
+    voiceParticipants.set(socket.id, { code, username });
+    const voiceIds = new Set(voiceParticipants.keys());
+    const peers = buildVoicePeerList(game, socket.id, voiceIds);
+    socket.emit('voicePeers', { peers });
+    game.players.forEach((p) => {
+      if (p.socket && p.socket.id !== socket.id) {
+        p.emit('voicePeerJoined', { socketId: socket.id, username });
+      }
+    });
+  });
+
+  socket.on('voiceLeave', () => {
+    leaveVoice(socket);
+  });
+
+  socket.on('voiceSignal', (data) => {
+    if (!data || !data.to || !data.signal) return;
+    const fromGame = findGameBySocket(socket);
+    const targetSocket = getSocketById(data.to);
+    if (!fromGame || !targetSocket) return;
+    const toGame = findGameBySocket(targetSocket);
+    if (!canRelayVoiceSignal(fromGame, toGame)) return;
+    targetSocket.emit('voiceSignal', {
+      from: socket.id,
+      signal: data.signal,
+    });
+  });
+
   socket.on('disconnect', () => {
+    leaveVoice(socket);
     const game = rooms.find(
       (r) => r.findPlayer(socket.id).socket.id === socket.id
     );

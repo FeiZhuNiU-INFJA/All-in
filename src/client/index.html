@@ -36,12 +36,14 @@
 		</div>
 	</div>
 
-	<button type="button" id="fullscreenBtn" class="fullscreen-btn" hidden>全屏</button>
-
 	<div id="gameDiv" class="poker-room" style="display:none;">
 		<div class="table-hud">
+			<nav class="table-top-bar" id="tableUtilBar" aria-label="牌桌工具">
+				<button type="button" id="ledgerBtn" class="top-btn" onclick="openLedgerModal()" title="耻辱榜">榜</button>
+				<button type="button" id="voiceBtn" class="top-btn top-btn--voice" hidden title="语音">麦</button>
+				<button type="button" id="fullscreenBtn" class="top-btn top-btn--fs" hidden title="进入全屏">全屏</button>
+			</nav>
 			<div id="table-title" class="table-hud-message"></div>
-			<button type="button" id="ledgerBtn" class="ledger-btn" onclick="openLedgerModal()" title="榜单">榜单</button>
 		</div>
 
 		<div class="table-stage">
@@ -228,7 +230,8 @@
 
 	<script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
 	<script src="./js/materialize.min.js"></script>
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.5.0/socket.io.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"></script>
+	<script src="./voice.js"></script>
 	<script src="./main.js"></script>
 </body>
 

@@ -79,15 +79,77 @@ Friends on your LAN can open http://192.168.1.23:5714
 
 ```bash
 PORT=5714 yarn start
+# 或常驻：npx pm2 start src/app.js --name all-in
 ```
 
-把 `5714` 放行（或 Nginx 反代），朋友访问：
+把 `5714` 放行（或只对本机开放，见下方 HTTPS），朋友访问：
 
 ```text
 http://你的服务器IP:5714
 ```
 
 生产环境建议用 `pm2` / `systemd` / Docker 守护进程。
+
+### HTTPS（语音 / 麦克风需要）
+
+**All-In 本身只提供 HTTP**（`src/app.js` 监听 `5714`）。浏览器开麦要求 **HTTPS 安全上下文**，所以公网部署时要在前面加一层 **反向代理** 做 TLS 终结。
+
+常见架构：
+
+```text
+浏览器 ──HTTPS:443──▶ Caddy / Nginx ──HTTP:5714──▶ Node (pm2)
+```
+
+#### 有域名（推荐）
+
+用 [Caddy](https://caddyserver.com/) 或 Nginx + Let's Encrypt，自动申请受信任证书。示例 Caddyfile：
+
+```text
+poker.example.com {
+    reverse_proxy 127.0.0.1:5714
+}
+```
+
+安全组放行 **80**（签证书）和 **443**；`5714` 可不对公网开放。
+
+#### 只有公网 IP（当前方案）
+
+没有域名时无法用 Let's Encrypt 正规证书，可用 **Caddy + 自签证书**：
+
+1. 生成证书（示例 IP `124.222.166.163`，按需替换）：
+
+```bash
+sudo mkdir -p /etc/caddy/certs
+sudo openssl req -x509 -nodes -newkey rsa:2048 \
+  -keyout /etc/caddy/certs/all-in.key \
+  -out /etc/caddy/certs/all-in.crt -days 825 \
+  -subj "/CN=124.222.166.163" \
+  -addext "subjectAltName=IP:124.222.166.163"
+sudo chown root:caddy /etc/caddy/certs/all-in.*
+```
+
+2. `/etc/caddy/Caddyfile`：
+
+```text
+{
+    auto_https off
+}
+
+:443 {
+    tls /etc/caddy/certs/all-in.crt /etc/caddy/certs/all-in.key
+    reverse_proxy 127.0.0.1:5714
+}
+
+:80 {
+    redir https://{host}{uri} permanent
+}
+```
+
+3. `sudo systemctl reload caddy`，安全组放行 **443**。
+
+访问 `https://你的公网IP/`；首次需在浏览器点 **高级 → 继续访问**（自签证书警告）。之后即可满足 HTTPS，为后续语音功能做准备。
+
+> 说明：`sslip.io` 等免费二级域名在部分云厂商网络下可能被拦截，有域名时仍建议用自己的域名 + Let's Encrypt。
 
 ---
 

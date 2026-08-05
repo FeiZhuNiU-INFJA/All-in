@@ -59,8 +59,18 @@ function isPageFullscreen() {
   );
 }
 
+function isImmersiveMode() {
+  return $('body').hasClass('game-immersive');
+}
+
+function getFullscreenTarget() {
+  var game = document.getElementById('gameDiv');
+  if (game && game.style.display !== 'none') return game;
+  return document.documentElement;
+}
+
 function canRequestFullscreen() {
-  var el = document.documentElement;
+  var el = getFullscreenTarget();
   return !!(
     el.requestFullscreen ||
     el.webkitRequestFullscreen ||
@@ -69,20 +79,35 @@ function canRequestFullscreen() {
   );
 }
 
+function enterImmersiveMode() {
+  $('body').addClass('game-immersive');
+  requestLandscape();
+  // Nudge mobile browsers to collapse the address bar when possible.
+  window.scrollTo(0, 1);
+  setTimeout(function () {
+    window.scrollTo(0, 0);
+  }, 80);
+  updateFullscreenBtn();
+}
+
+function exitImmersiveMode() {
+  $('body').removeClass('game-immersive');
+  updateFullscreenBtn();
+}
+
 function requestGameFullscreen() {
   if (isDisplayStandalone() || isPageFullscreen()) {
     requestLandscape();
     return;
   }
-  var el = document.documentElement;
+  var el = getFullscreenTarget();
   var req =
     el.requestFullscreen ||
     el.webkitRequestFullscreen ||
     el.webkitRequestFullScreen ||
     el.msRequestFullscreen;
   if (!req) {
-    requestLandscape();
-    updateFullscreenBtn();
+    enterImmersiveMode();
     return;
   }
   try {
@@ -94,10 +119,37 @@ function requestGameFullscreen() {
           updateFullscreenBtn();
         })
         .catch(function () {
-          updateFullscreenBtn();
+          enterImmersiveMode();
         });
     } else {
       requestLandscape();
+      updateFullscreenBtn();
+    }
+  } catch (e) {
+    enterImmersiveMode();
+  }
+}
+
+function exitGameFullscreen() {
+  if (isImmersiveMode()) {
+    exitImmersiveMode();
+    return;
+  }
+  var doc = document;
+  var exit =
+    doc.exitFullscreen ||
+    doc.webkitExitFullscreen ||
+    doc.webkitCancelFullScreen ||
+    doc.msExitFullscreen;
+  if (!exit || !isPageFullscreen()) {
+    updateFullscreenBtn();
+    return;
+  }
+  try {
+    var result = exit.call(doc);
+    if (result && typeof result.then === 'function') {
+      result.then(updateFullscreenBtn).catch(updateFullscreenBtn);
+    } else {
       updateFullscreenBtn();
     }
   } catch (e) {
@@ -105,28 +157,43 @@ function requestGameFullscreen() {
   }
 }
 
+function toggleGameFullscreen() {
+  if (isPageFullscreen() || isImmersiveMode()) exitGameFullscreen();
+  else requestGameFullscreen();
+}
+
 function updateFullscreenBtn() {
   var $btn = $('#fullscreenBtn');
   if (!$btn.length) return;
-  var show =
-    $('body').hasClass('in-game') &&
-    !isDisplayStandalone() &&
-    !isPageFullscreen() &&
-    canRequestFullscreen() &&
-    ('ontouchstart' in window || window.matchMedia('(max-width: 900px)').matches);
-  if (show) $btn.prop('hidden', false);
-  else $btn.prop('hidden', true);
+  var inGame = $('body').hasClass('in-game');
+  var mobile =
+    'ontouchstart' in window || window.matchMedia('(max-width: 900px)').matches;
+  var show = inGame && !isDisplayStandalone() && mobile;
+  $btn.prop('hidden', !show);
+  if (!show) return;
+  var active = isPageFullscreen() || isImmersiveMode();
+  if (active) {
+    $btn.text('退出');
+    $btn.attr('title', '退出全屏');
+    $btn.addClass('top-btn--fs-active');
+  } else {
+    $btn.text('全屏');
+    $btn.attr('title', '进入全屏');
+    $btn.removeClass('top-btn--fs-active');
+  }
 }
 
 function enterGameView() {
   $('body').addClass('in-game');
-  requestGameFullscreen();
   updateFullscreenBtn();
+  VoiceChat.show();
 }
 
 function leaveGameView() {
+  exitImmersiveMode();
   $('body').removeClass('in-game');
   updateFullscreenBtn();
+  VoiceChat.hide();
 }
 
 $(document).ready(function () {
@@ -162,7 +229,7 @@ $(document).ready(function () {
 
   $('#fullscreenBtn').on('click', function (e) {
     e.preventDefault();
-    requestGameFullscreen();
+    toggleGameFullscreen();
   });
 
   // Orientation / fullscreen need a user gesture on most browsers.
@@ -237,10 +304,43 @@ function confirmAllIn() {
   );
 }
 
-var socket = io();
+var socket = io({
+  transports: ['polling', 'websocket'],
+  upgrade: true,
+  reconnection: true,
+  reconnectionAttempts: 10,
+});
+if (window.VoiceChat && typeof VoiceChat.init === 'function') {
+  VoiceChat.init(socket);
+}
 var gameInfo = null;
 var myUsername = '';
 var roomCode = '';
+
+function lobbyErrorText(code) {
+  var map = {
+    invalid_name: '昵称无效（不能为空，最多 12 字）',
+    room_not_found: '房间不存在，请检查房间码',
+    duplicate_name: '这个昵称已经在房间里了，换一个试试',
+    room_full: '房间已满',
+    not_enough_players: '人数不够，暂时无法开始',
+    already_started: '对局已开始',
+  };
+  return map[code] || '操作失败，请重试';
+}
+
+function showLobbyError(msg) {
+  var $box = $('#lobbyError');
+  if (!$box.length) {
+    $box = $('<p id="lobbyError" class="lobby-error" role="alert"></p>');
+    $('.lobby-modal.is-open .modal-content').prepend($box);
+  }
+  $box.text(msg).show();
+}
+
+function clearLobbyError() {
+  $('#lobbyError').remove();
+}
 
 var SESSION_KEY = 'allin_session';
 function saveSession(code, username) {
@@ -995,16 +1095,19 @@ socket.on('rebuyResult', function (data) {
   $('#rebuyBar').hide();
 });
 
+socket.on('connect_error', function () {
+  showLobbyError('无法连接服务器，请刷新后重试（确认使用 https 地址）');
+});
+
 socket.on('hostRoom', function (data) {
   if (data == undefined || data.ok === false) {
     $('#joinButton').removeClass('disabled');
-  } else {
-    if (data.code != null) roomCode = String(data.code);
-    if (data.code && myUsername) saveSession(data.code, myUsername);
-  }
-  if (data == undefined || data.ok === false) {
+    showLobbyError(lobbyErrorText(data && data.error));
     return;
   }
+  clearLobbyError();
+  if (data.code != null) roomCode = String(data.code);
+  if (data.code && myUsername) saveSession(data.code, myUsername);
   if (data.players.length >= 11) {
       $('#hostModalContent').html(
         '<h5>Code:</h5><code>' +
@@ -1077,39 +1180,41 @@ socket.on('joinRoom', function (data) {
   if (data == undefined || data.ok === false) {
     clearSession();
     $('#hostButton').removeClass('disabled');
+    showLobbyError(lobbyErrorText(data && data.error));
+    return;
+  }
+  clearLobbyError();
+  roomCode =
+    data.code != null
+      ? String(data.code)
+      : String($('#code-field').val()).trim();
+  if (!myUsername) {
+    myUsername = $('#joinName-field').val() || '';
+  }
+  if (roomCode && myUsername) saveSession(roomCode, myUsername);
+  if (data.persistent) {
+    // Persistent lobby: no fixed host, anyone can start once >= 2 are in.
+    $('#joinModalContent').html(
+      '<h5>房间已就绪</h5><hr /><h5>Players Currently in Room</h5>'
+    );
+    var needMore = !data.players || data.players.length < 2;
+    $('#startGameAreaDisconnectSituation').html(
+      needMore
+        ? '<p style="opacity:.7">等待至少 2 位玩家加入…</p>'
+        : '<br /><button type="button" onclick="startGame()" class="modal-action-btn">Start Game</button>'
+    );
   } else {
-    roomCode =
-      data.code != null
-        ? String(data.code)
-        : String($('#code-field').val()).trim();
-    if (!myUsername) {
-      myUsername = $('#joinName-field').val() || '';
-    }
-    if (roomCode && myUsername) saveSession(roomCode, myUsername);
-    if (data.persistent) {
-      // Persistent lobby: no fixed host, anyone can start once >= 2 are in.
-      $('#joinModalContent').html(
-        '<h5>房间已就绪</h5><hr /><h5>Players Currently in Room</h5>'
-      );
-      var needMore = !data.players || data.players.length < 2;
-      $('#startGameAreaDisconnectSituation').html(
-        needMore
-          ? '<p style="opacity:.7">等待至少 2 位玩家加入…</p>'
-          : '<br /><button type="button" onclick="startGame()" class="modal-action-btn">Start Game</button>'
-      );
-    } else {
-      $('#joinModalContent').html(
-        '<h5>' +
-          data.host +
-          "'s room</h5><hr /><h5>Players Currently in Room</h5><p>刷新页面会在约 20 秒内自动回到房间。</p>"
-      );
-    }
-    $('#playersNamesJoined').html(
-      data.players.map(function (p) {
-        return '<span>' + p + '</span><br />';
-      })
+    $('#joinModalContent').html(
+      '<h5>' +
+        data.host +
+        "'s room</h5><hr /><h5>Players Currently in Room</h5><p>刷新页面会在约 20 秒内自动回到房间。</p>"
     );
   }
+  $('#playersNamesJoined').html(
+    data.players.map(function (p) {
+      return '<span>' + p + '</span><br />';
+    })
+  );
 });
 
 socket.on('dealt', function (data) {
@@ -1526,35 +1631,45 @@ socket.on('endHand', function (data) {
 });
 
 var beginHost = function () {
-  if ($('#hostName-field').val() == '') {
+  clearLobbyError();
+  if ($('#hostName-field').val() == '' || $('#hostName-field').val().length > 12) {
+    showLobbyError('请填写有效昵称（最多 12 字）');
     return;
-  } else {
-    myUsername = $('#hostName-field').val();
-    requestGameFullscreen();
-    socket.emit('host', { username: myUsername });
-    $('#joinButton').addClass('disabled');
-    $('#joinButton').off('click');
   }
+  if (!socket.connected) {
+    showLobbyError('尚未连上服务器，请稍候再试，或刷新页面');
+    socket.connect();
+    return;
+  }
+  myUsername = $('#hostName-field').val();
+  socket.emit('host', { username: myUsername });
+  $('#joinButton').addClass('disabled');
+  $('#joinButton').off('click');
 };
 
 var joinRoom = function () {
   // yes, i know this is client-side.
+  clearLobbyError();
   if (
     $('#joinName-field').val() == '' ||
     $('#code-field').val() == '' ||
     $('#joinName-field').val().length > 12
   ) {
+    showLobbyError('请填写昵称和房间码');
     return;
-  } else {
-    myUsername = $('#joinName-field').val();
-    requestGameFullscreen();
-    socket.emit('join', {
-      code: String($('#code-field').val()).trim(),
-      username: myUsername,
-    });
-    $('#hostButton').addClass('disabled');
-    $('#hostButton').off('click');
   }
+  if (!socket.connected) {
+    showLobbyError('尚未连上服务器，请稍候再点加入，或刷新页面');
+    socket.connect();
+    return;
+  }
+  myUsername = $('#joinName-field').val();
+  socket.emit('join', {
+    code: String($('#code-field').val()).trim(),
+    username: myUsername,
+  });
+  $('#hostButton').addClass('disabled');
+  $('#hostButton').off('click');
 };
 
 var startGame = function (gameCode) {
