@@ -41,9 +41,12 @@ const Game = function (name, host) {
   // Tests set these to 0 for synchronous street advances.
   this.streetShowMs = 1500;
   this.streetCollectMs = 900;
+  // Pause after flipping hole cards on all-in before dealing the runout.
+  this.showHandsMs = 900;
   if (process.env.JEST_WORKER_ID != null) {
     this.streetShowMs = 0;
     this.streetCollectMs = 0;
+    this.showHandsMs = 0;
   }
   this.debug = false;
   this.smallBlind = 1;
@@ -589,6 +592,68 @@ const Game = function (name, host) {
     setTimeout(() => this.revealCards(winners), dealMs);
   };
 
+  // Flip remaining players' hole cards before an all-in runout.
+  this.emitShowHands = () => {
+    const cardData = [];
+    for (let i = 0; i < this.players.length; i++) {
+      cardData.push({
+        username: this.players[i].getUsername(),
+        cards: this.players[i].cards,
+        folded: this.players[i].getStatus() == 'Fold',
+        money: this.players[i].getMoney(),
+        buyIns: this.players[i].buyIns,
+        readyState: this.players[i].getReadyState(),
+        seatIndex: this.players[i].getSeatIndex(),
+      });
+    }
+    for (let pn = 0; pn < this.getNumPlayers(); pn++) {
+      this.players[pn].emit('showHands', {
+        username: this.players[pn].getUsername(),
+        cards: cardData,
+        community: this.community,
+        bets: this.roundData.bets,
+        pot: this.getCurrentPot(),
+      });
+    }
+  };
+
+  // Deal every remaining board street into empty stage shells (all-in runout).
+  this.dealAllInRunoutCards = () => {
+    this.runoutCards = 0;
+    if (this.roundData.bets.length == 1) {
+      this.community.push(this.deck.dealRandomCard());
+      this.community.push(this.deck.dealRandomCard());
+      this.community.push(this.deck.dealRandomCard());
+      this.roundData.bets.push([]);
+      this.runoutCards += 3;
+    }
+    if (this.roundData.bets.length == 2) {
+      this.community.push(this.deck.dealRandomCard());
+      this.roundData.bets.push([]);
+      this.runoutCards += 1;
+    }
+    if (this.roundData.bets.length == 3) {
+      this.community.push(this.deck.dealRandomCard());
+      this.roundData.bets.push([]);
+      this.runoutCards += 1;
+    }
+  };
+
+  this.startAllInRunout = () => {
+    this.log(' all players all in');
+    this.clearTheirTurn();
+    // 1) Show hole cards first, 2) deal remaining board, 3) award pot.
+    this.emitShowHands();
+    const continueRunout = () => {
+      this.streetAdvanceTimer = null;
+      this.dealAllInRunoutCards();
+      this.rerender();
+      this.finishShowdown();
+    };
+    if (this.showHandsMs <= 0) continueRunout();
+    else this.streetAdvanceTimer = setTimeout(continueRunout, this.showHandsMs);
+  };
+
   this.advanceStreet = () => {
     const [numNonFolds, nonFolderPlayer] = this.getNonFoldedPlayer();
     if (numNonFolds == 1) {
@@ -599,28 +664,7 @@ const Game = function (name, host) {
     }
 
     if (this.allPlayersAllIn()) {
-      this.log(' all players all in');
-      this.runoutCards = 0;
-      if (this.roundData.bets.length == 1) {
-        this.community.push(this.deck.dealRandomCard());
-        this.community.push(this.deck.dealRandomCard());
-        this.community.push(this.deck.dealRandomCard());
-        this.roundData.bets.push([]);
-        this.runoutCards += 3;
-      }
-      if (this.roundData.bets.length == 2) {
-        this.community.push(this.deck.dealRandomCard());
-        this.roundData.bets.push([]);
-        this.runoutCards += 1;
-      }
-      if (this.roundData.bets.length == 3) {
-        this.community.push(this.deck.dealRandomCard());
-        this.roundData.bets.push([]);
-        this.runoutCards += 1;
-      }
-      // Runout dealt into empty stage shells — go straight to showdown.
-      this.rerender();
-      this.finishShowdown();
+      this.startAllInRunout();
       return;
     }
 

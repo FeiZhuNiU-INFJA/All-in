@@ -1412,6 +1412,44 @@ test('a watching (rebuying) player never blocks the ready-up gate', () => {
   expect(game.canStartNextHand()).toBe(true);
 });
 
+test('all-in runout shows hole cards before dealing the board', () => {
+  const game = new Game('runout-order', '1');
+  game.smallBlind = 5;
+  game.bigBlind = 10;
+  const p1 = addMockPlayer(game, 1);
+  const p2 = addMockPlayer(game, 2);
+  p1.money = 100;
+  p2.money = 100;
+
+  const timeline = [];
+  p1.socket.on('showHands', () => {
+    timeline.push({ type: 'showHands', community: game.community.length });
+  });
+  p1.socket.on('rerender', (data) => {
+    timeline.push({
+      type: 'rerender',
+      community: (data.community || []).length,
+    });
+  });
+
+  game.startGame();
+  let cur = getCurrentPlayer(game.players);
+  expect(game.allIn(cur.socket)).toBe(true);
+  game.finishResolvedAction('allin', cur.socket, null);
+  cur = getCurrentPlayer(game.players);
+  expect(game.call(cur.socket)).toBe(true);
+  game.finishResolvedAction('call', cur.socket, null);
+
+  const showIdx = timeline.findIndex((e) => e.type === 'showHands');
+  expect(showIdx).toBeGreaterThanOrEqual(0);
+  expect(timeline[showIdx].community).toBe(0);
+  const boardAfterShow = timeline
+    .slice(showIdx + 1)
+    .find((e) => e.type === 'rerender' && e.community === 5);
+  expect(boardAfterShow).toBeTruthy();
+  expect(game.community.length).toBe(5);
+});
+
 test('allIn shoves all remaining chips', () => {
   const game = new Game('allin-game', '1');
   game.smallBlind = 5;
@@ -1428,6 +1466,7 @@ test('allIn shoves all remaining chips', () => {
   expect(cur.allIn).toBe(true);
   expect(game.getCurrentTopBet()).toBeGreaterThanOrEqual(before);
 });
+
 
 test('min-raise compounds across multiple raises (3 players)', () => {
   const game = new Game('minraise-3', '1');

@@ -369,6 +369,8 @@ function clearSession() {
 var lastCommunityCount = 0; // community cards already shown — animate only new ones
 var skipNextDealAnim = false; // set on gameBegin so late joiners don't replay the deal animation
 var pendingDealAnim = false; // set on 'dealt' so the next rerender animates opponents' cards
+// After all-in: hole cards stay face-up while the board runs out.
+var revealedHands = null; // { username: [card, card] }
 var lastActionSeq = 0; // last action sound played — de-dupe across rerenders
 var countdownInterval = null;
 var countdownKind = null;
@@ -1221,6 +1223,7 @@ socket.on('dealt', function (data) {
   myUsername = data.username;
   myHoleCards = data.cards || [];
   lastCommunityCount = 0; // new hand: community is empty again
+  revealedHands = null;
   pendingDealAnim = true; // hole + opponents animate on the next rerender
   $('#mainContent').remove();
 });
@@ -1398,6 +1401,10 @@ socket.on('rerender', function (data) {
   $('#table-title').text('');
   $('#opponentCards').html(
     renderTableRing(data.players, data.username, function (p) {
+      var shown =
+        revealedHands && revealedHands[p.username]
+          ? revealedHands[p.username]
+          : null;
       return {
         text: p.status,
         money: p.money,
@@ -1408,6 +1415,8 @@ socket.on('rerender', function (data) {
         isChecked: p.isChecked,
         readyState: p.readyState,
         roundInProgress: data.roundInProgress,
+        cards: shown,
+        showCards: !!shown,
       };
     })
   );
@@ -1541,8 +1550,41 @@ function renderReadyPhase(opts) {
   $wrap.html(html);
 }
 
+socket.on('showHands', function (data) {
+  // All-in runout: flip hole cards before the remaining board is dealt.
+  revealedHands = {};
+  (data.cards || []).forEach(function (p) {
+    if (!p.folded && p.cards && p.cards.length) {
+      revealedHands[p.username] = p.cards;
+    }
+  });
+  hideAllActionBtns();
+  $('#table-title').text('摊牌');
+  var me = (data.cards || []).filter(function (p) {
+    return p.username === data.username;
+  })[0];
+  if (me && me.cards && me.cards.length) {
+    myHoleCards = me.cards;
+  }
+  $('#opponentCards').html(
+    renderTableRing(data.cards, data.username, function (p) {
+      return {
+        text: p.folded ? 'Fold' : '',
+        money: p.money,
+        blind: '',
+        bets: data.bets,
+        buyIns: p.buyIns,
+        cards: p.cards,
+        showCards: !p.folded,
+        roundInProgress: true,
+      };
+    })
+  );
+});
+
 socket.on('reveal', function (data) {
   hideAllActionBtns();
+  revealedHands = null;
 
   var winners = parseWinners(data.winners);
   $('#table-title').text('');
