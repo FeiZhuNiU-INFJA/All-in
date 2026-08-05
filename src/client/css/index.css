@@ -1213,8 +1213,30 @@ body.modal-open {
 
 .seat-cards {
   display: flex;
-  gap: 2px;
   justify-content: center;
+  align-items: flex-end;
+  gap: 0;
+  padding: 2px 0 4px;
+}
+
+/* Two hole cards: overlap + soft fan (saves width, reads like a hand). */
+.seat-cards > :nth-child(1) {
+  --fan-rot: -12deg;
+  transform: rotate(var(--fan-rot));
+  transform-origin: 50% 100%;
+  z-index: 1;
+}
+
+.seat-cards > :nth-child(2) {
+  --fan-rot: 12deg;
+  margin-left: -28px;
+  transform: rotate(var(--fan-rot));
+  transform-origin: 50% 100%;
+  z-index: 2;
+}
+
+.table-seat.seat-hero .seat-cards > :nth-child(2) {
+  margin-left: -38px;
 }
 
 /* Bankroll — quiet text under the cards, not a competing chip. */
@@ -1701,9 +1723,24 @@ body.modal-open {
 .hero-cards {
   display: flex;
   justify-content: center;
-  gap: 6px;
+  align-items: flex-end;
+  gap: 0;
   min-height: 96px;
-  align-items: center;
+}
+
+.hero-cards > :nth-child(1) {
+  --fan-rot: -12deg;
+  transform: rotate(var(--fan-rot));
+  transform-origin: 50% 100%;
+  z-index: 1;
+}
+
+.hero-cards > :nth-child(2) {
+  --fan-rot: 12deg;
+  margin-left: -42px;
+  transform: rotate(var(--fan-rot));
+  transform-origin: 50% 100%;
+  z-index: 2;
 }
 
 .hero-footer {
@@ -2149,14 +2186,14 @@ body.modal-open {
 
 @keyframes deal-in {
   0% {
-    transform: translate(0, -130px) scale(0.72) rotate(-6deg);
+    transform: translate(0, -130px) scale(0.72) rotate(calc(var(--fan-rot, 0deg) - 6deg));
     opacity: 0;
   }
   55% {
     opacity: 1;
   }
   100% {
-    transform: translate(0, 0) scale(1) rotate(0deg);
+    transform: translate(0, 0) scale(1) rotate(var(--fan-rot, 0deg));
     opacity: 1;
   }
 }
@@ -2168,14 +2205,14 @@ body.modal-open {
 @media (max-width: 600px) {
   @keyframes deal-in {
     0% {
-      transform: translate(0, -90px) scale(0.72) rotate(-6deg);
+      transform: translate(0, -90px) scale(0.72) rotate(calc(var(--fan-rot, 0deg) - 6deg));
       opacity: 0;
     }
     55% {
       opacity: 1;
     }
     100% {
-      transform: translate(0, 0) scale(1) rotate(0deg);
+      transform: translate(0, 0) scale(1) rotate(var(--fan-rot, 0deg));
       opacity: 1;
     }
   }
@@ -2338,6 +2375,14 @@ body.modal-open {
     width: 40px;
   }
 
+  .table-seat.seat-hero .seat-cards > :nth-child(2) {
+    margin-left: -24px;
+  }
+
+  .seat-cards > :nth-child(2) {
+    margin-left: -20px;
+  }
+
   .blankCard,
   .playingCard_black_opponent,
   .playingCard_red_opponent {
@@ -2411,6 +2456,10 @@ body.modal-open {
   .hero-cards .playingCard_red {
     height: 72px;
     width: 50px;
+  }
+
+  .hero-cards > :nth-child(2) {
+    margin-left: -28px;
   }
 
   .community-cards .playingCard_black,
@@ -2596,6 +2645,10 @@ body.modal-open {
   .table-seat.seat-hero .playingCard_red {
     height: 56px;
     width: 40px;
+  }
+
+  .table-seat.seat-hero .seat-cards > :nth-child(2) {
+    margin-left: -24px;
   }
 
   .table-seat.seat-hero .card-idx {
